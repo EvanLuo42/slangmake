@@ -71,21 +71,6 @@ install/
   share/slangmake/ LICENSE, README.md
 ```
 
-### Release artifacts
-
-Pushing a tag of the form `vX.Y.Z` triggers
-`.github/workflows/release.yml`: it configures, builds, installs, zips the
-staging tree as `slangmake-vX.Y.Z-windows-x86_64.zip`, and attaches it to
-a GitHub Release for the tag (auto-generated release notes from the commit
-log since the previous tag). Needed the first time you enable it:
-
-1. Push your commits to `main`.
-2. Tag: `git tag -a v0.1.0 -m "v0.1.0"`.
-3. Push the tag: `git push origin v0.1.0`.
-
-The workflow needs `contents: write` permission (already declared inside
-the workflow file — no repo-level tweaking required).
-
 ## CLI usage
 
 ```bash
