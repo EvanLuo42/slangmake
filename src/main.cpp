@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "slangmake_internal.h"
+#include "slangmake_version.h"
 
 namespace fs = std::filesystem;
 using namespace slangmake;
@@ -177,7 +178,7 @@ int runDump(const fs::path& path, bool includeReflection)
 int main(int argc, char** argv)
 {
     CLI::App app{"slangmake — compile Slang shader permutations into a single .bin blob"};
-    app.set_version_flag("--version", "0.1.0");
+    app.set_version_flag("--version", SLANGMAKE_VERSION_STR);
 
     std::string dumpPath;
     bool        dumpReflection = false;

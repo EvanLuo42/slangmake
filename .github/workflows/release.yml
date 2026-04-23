@@ -17,6 +17,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Strip the leading `v` from the tag name so it matches the Keep-a-
+      # Changelog heading style (`## [0.2.0]`, not `## [v0.2.0]`). The reader
+      # action does not strip this for us.
+      - name: Derive CHANGELOG version from tag
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Extract the section of CHANGELOG matching the tag so its contents can
+      # become the release body. Fails fast (before we spend 5+ minutes on a
+      # Windows build) if the tag has no entry — that's the intended forcing
+      # function to keep CHANGELOG in sync with what's actually released.
+      - name: Read CHANGELOG entry for this tag
+        id: changelog
+        uses: mindsers/changelog-reader-action@v2
+        with:
+          version: ${{ steps.ver.outputs.version }}
+          path: ./CHANGELOG
+
       # windows-latest has MinGW early on PATH, so raw cmake picks that up
       # instead of MSVC. This action exports the VS Developer env (cl.exe,
       # link.exe, rc.exe) into the remainder of the job.
@@ -55,4 +74,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: slangmake-*-windows-x86_64.zip
+          # Curated CHANGELOG section first; GitHub's auto-generated notes
+          # (full commit list since the previous tag) appended below.
+          body: ${{ steps.changelog.outputs.changes }}
           generate_release_notes: true

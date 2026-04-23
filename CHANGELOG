@@ -1,0 +1,46 @@
+# Changelog
+
+All notable changes to slangmake are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.2.0] - 2026-04-23
+
+### Added
+- Type-parameter permutation axes via `// [permutation type] NAME={T1,T2}` magic
+  comments and `--permutation-type` CLI overrides. Each combination is specialised
+  at compile time through `IComponentType::specialize` — no runtime Slang session
+  needed.
+- `ReflectionView::Cursor`, a Slang-`ShaderCursor`-style navigator over the
+  serialised reflection: `rootCursor()["gMat"]["albedo"]` returns the resource's
+  absolute `(space, slot)`, auto-dereferences `ConstantBuffer` / `ParameterBlock`,
+  tracks per-category offsets and spaces, and exposes `container()` for the
+  implicit CB plus `descriptorSetLayout()` for full `VkDescriptorSetLayout`
+  construction.
+- `BlobReader::find(const Permutation&)` overload so type-aware lookup doesn't
+  need to pre-build a key string.
+- Documentation under `docs/` covering cursor, permutations, integration and the
+  raw reflection API.
+- `.github/workflows/format.yml` — clang-format-18 CI gate on every push / PR.
+
+### Changed
+- Project version is now centralised in `CMakeLists.txt`'s `project(VERSION ...)`
+  and injected into code through a generated `slangmake_version.h`. No more
+  hand-updating `main.cpp`.
+- `Permutation::key()` appends type-arg axes after a `|` separator; backward
+  compatible with old constants-only keys.
+
+### Fixed
+- `Cursor::resourceBinding()` now folds enclosing `SubElementRegisterSpace` /
+  `RegisterSpace` contributions into the returned space, so resources inside a
+  `ParameterBlock` report the correct absolute descriptor set.
+
+## [0.1.0] - 2026-04-23
+
+### Added
+- Initial release: Slang permutation batch compiler, reflection-embedding blob
+  format, incremental rebuilds, parallel compile, LZ4 / zstd compression, CLI +
+  C++ library API.

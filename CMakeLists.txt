@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(slangmake VERSION 0.1.0 LANGUAGES C CXX)
+project(slangmake VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 
@@ -10,12 +10,12 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 option(SLANG_MAKE_BUILD_SHARED "Build slangmake as a shared library" ON)
-option(SLANG_MAKE_BUILD_TESTS  "Build slangmake unit tests"          ON)
-set(SLANG_MAKE_FETCH_SLANG_VERSION   "2026.7" CACHE STRING "Slang version to fetch")
-set(SLANG_MAKE_FETCH_CLI11_VERSION   "2.6.2"  CACHE STRING "CLI11 version to fetch")
+option(SLANG_MAKE_BUILD_TESTS "Build slangmake unit tests" ON)
+set(SLANG_MAKE_FETCH_SLANG_VERSION "2026.7" CACHE STRING "Slang version to fetch")
+set(SLANG_MAKE_FETCH_CLI11_VERSION "2.6.2" CACHE STRING "CLI11 version to fetch")
 set(SLANG_MAKE_FETCH_DOCTEST_VERSION "2.4.11" CACHE STRING "doctest version to fetch")
-set(SLANG_MAKE_FETCH_LZ4_VERSION     "1.10.0" CACHE STRING "LZ4 version to fetch")
-set(SLANG_MAKE_FETCH_ZSTD_VERSION    "1.5.7"  CACHE STRING "zstd version to fetch")
+set(SLANG_MAKE_FETCH_LZ4_VERSION "1.10.0" CACHE STRING "LZ4 version to fetch")
+set(SLANG_MAKE_FETCH_ZSTD_VERSION "1.5.7" CACHE STRING "zstd version to fetch")
 
 if (SLANG_MAKE_BUILD_SHARED)
     add_library(slangmake-lib SHARED)
@@ -35,7 +35,13 @@ target_sources(slangmake-lib PRIVATE
         include/slangmake.h
 )
 target_include_directories(slangmake-lib PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include)
+
+configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/slangmake_version.h.in
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include/slangmake_version.h
+        @ONLY)
 
 add_executable(slangmake)
 target_sources(slangmake PRIVATE
@@ -71,6 +77,7 @@ install(TARGETS slangmake-lib
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 install(FILES include/slangmake.h
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include/slangmake_version.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 install(FILES LICENSE README.md
