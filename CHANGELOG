@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- `BlobWriter` now deduplicates identical bytecode payloads across entries via the same FNV-1a + full-compare scheme already used for reflection. Two permutations that produce byte-identical SPIR-V / DXIL (dead-stripped axes, reflection-only differences, etc.) now share one on-disk payload. Blob format is unchanged; readers see no behavioural difference.
+
 ## [0.2.0] - 2026-04-23
 
 ### Added

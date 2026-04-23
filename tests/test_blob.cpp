@@ -129,6 +129,78 @@ TEST_CASE("BlobWriter deduplicates identical reflection payloads")
     CHECK(std::vector<uint8_t>(e2.reflection.begin(), e2.reflection.end()) == sharedRefl);
 }
 
+TEST_CASE("BlobWriter deduplicates identical bytecode payloads")
+{
+    BlobWriter w(Target::SPIRV);
+    auto       sharedCode = bytes({'C', 'O', 'D', 'E', 0, 1, 2, 3, 4, 5, 6, 7});
+    auto       otherCode  = bytes({0xDE, 0xAD, 0xBE, 0xEF});
+    auto       refl0      = bytes({'R', '0'});
+    auto       refl1      = bytes({'R', '1'});
+    auto       refl2      = bytes({'R', '2'});
+
+    w.addEntry(perm({{"K", "a"}}), sharedCode, refl0);
+    w.addEntry(perm({{"K", "b"}}), otherCode, refl1);
+    w.addEntry(perm({{"K", "c"}}), sharedCode, refl2); // byte-identical code to entry 0
+
+    auto blob = w.finalize();
+
+    const auto* records = reinterpret_cast<const fmt::EntryRecord*>(blob.data() + sizeof(fmt::BlobHeader));
+
+    // Entries 0 and 2 must point at the same code bytes.
+    CHECK(records[0].codeOffset == records[2].codeOffset);
+    CHECK(records[0].codeSize == records[2].codeSize);
+    // Entry 1 has distinct content and must live at a different offset.
+    CHECK(records[1].codeOffset != records[0].codeOffset);
+
+    // Their reflections, however, are distinct so they must not alias.
+    CHECK(records[0].reflOffset != records[2].reflOffset);
+
+    // Reader returns correct bytes for every entry.
+    BlobReader r(blob);
+    REQUIRE(r.valid());
+    CHECK(std::vector<uint8_t>(r.at(0).code.begin(), r.at(0).code.end()) == sharedCode);
+    CHECK(std::vector<uint8_t>(r.at(1).code.begin(), r.at(1).code.end()) == otherCode);
+    CHECK(std::vector<uint8_t>(r.at(2).code.begin(), r.at(2).code.end()) == sharedCode);
+    CHECK(std::vector<uint8_t>(r.at(0).reflection.begin(), r.at(0).reflection.end()) == refl0);
+    CHECK(std::vector<uint8_t>(r.at(2).reflection.begin(), r.at(2).reflection.end()) == refl2);
+}
+
+TEST_CASE("BlobWriter deduplicates code and reflection independently")
+{
+    // One entry is a pure duplicate of entry 0 (same code AND same reflection);
+    // another shares only code; another shares only reflection. All three of
+    // those dedup slots must resolve without overlap or corruption.
+    BlobWriter w(Target::SPIRV);
+    auto       sharedCode = bytes({'X', 'X', 'X', 'X', 'X', 'X', 'X', 'X'});
+    auto       sharedRefl = bytes({'R', 'R', 'R', 'R'});
+    auto       otherCode  = bytes({0xAA, 0xBB});
+    auto       otherRefl  = bytes({0xCC, 0xDD, 0xEE});
+
+    w.addEntry(perm({{"K", "0"}}), sharedCode, sharedRefl);
+    w.addEntry(perm({{"K", "1"}}), sharedCode, sharedRefl); // both dup
+    w.addEntry(perm({{"K", "2"}}), sharedCode, otherRefl);  // code dup, refl unique
+    w.addEntry(perm({{"K", "3"}}), otherCode, sharedRefl);  // refl dup, code unique
+
+    auto       blob = w.finalize();
+    BlobReader r(blob);
+    REQUIRE(r.valid());
+
+    const auto* records = reinterpret_cast<const fmt::EntryRecord*>(blob.data() + sizeof(fmt::BlobHeader));
+    CHECK(records[0].codeOffset == records[1].codeOffset);
+    CHECK(records[0].codeOffset == records[2].codeOffset);
+    CHECK(records[0].reflOffset == records[1].reflOffset);
+    CHECK(records[0].reflOffset == records[3].reflOffset);
+
+    // Entry 3's code must NOT alias entries 0..2.
+    CHECK(records[3].codeOffset != records[0].codeOffset);
+    // Entry 2's refl must NOT alias entries 0,1,3.
+    CHECK(records[2].reflOffset != records[0].reflOffset);
+
+    CHECK(std::vector<uint8_t>(r.at(0).code.begin(), r.at(0).code.end()) == sharedCode);
+    CHECK(std::vector<uint8_t>(r.at(3).code.begin(), r.at(3).code.end()) == otherCode);
+    CHECK(std::vector<uint8_t>(r.at(2).reflection.begin(), r.at(2).reflection.end()) == otherRefl);
+}
+
 TEST_CASE("BlobReader::enumerate returns keys in insertion order")
 {
     BlobWriter w(Target::SPIRV);

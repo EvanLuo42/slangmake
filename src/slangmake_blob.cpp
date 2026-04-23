@@ -130,6 +130,28 @@ std::vector<uint8_t> BlobWriter::finalize() const
             reflHashToCanonical.emplace(h, i);
     }
 
+    // Bytecode dedup: same scheme as reflection. Two permutations whose target
+    // bytecode is byte-identical (e.g. axes that Slang dead-strips, or axes
+    // whose difference only lives in a user-attribute exposed through
+    // reflection) share a single code payload on disk. Readers only see the
+    // (offset, size) pair through EntryRecord; that two records point at the
+    // same bytes is transparent to them.
+    std::vector<size_t>                  codeCanonical(m_entries.size());
+    std::unordered_map<uint64_t, size_t> codeHashToCanonical;
+    for (size_t i = 0; i < m_entries.size(); ++i)
+    {
+        codeCanonical[i] = i;
+        if (m_entries[i].code.empty())
+            continue;
+        uint64_t h = kFnvOffset;
+        fnv1aMix(h, m_entries[i].code.data(), m_entries[i].code.size());
+        auto it = codeHashToCanonical.find(h);
+        if (it != codeHashToCanonical.end() && m_entries[it->second].code == m_entries[i].code)
+            codeCanonical[i] = it->second;
+        else
+            codeHashToCanonical.emplace(h, i);
+    }
+
     std::vector<fmt::EntryRecord> records(m_entries.size());
     size_t                        cursor = dataStart;
     for (size_t i = 0; i < m_entries.size(); ++i)
@@ -140,10 +162,18 @@ std::vector<uint8_t> BlobWriter::finalize() const
         records[i].keySize   = static_cast<uint32_t>(e.key.size() + 1);
         cursor += e.key.size() + 1;
 
-        cursor                = align8(cursor);
-        records[i].codeOffset = static_cast<uint32_t>(cursor);
-        records[i].codeSize   = static_cast<uint32_t>(e.code.size());
-        cursor += e.code.size();
+        if (codeCanonical[i] == i)
+        {
+            cursor                = align8(cursor);
+            records[i].codeOffset = static_cast<uint32_t>(cursor);
+            records[i].codeSize   = static_cast<uint32_t>(e.code.size());
+            cursor += e.code.size();
+        }
+        else
+        {
+            records[i].codeOffset = records[codeCanonical[i]].codeOffset;
+            records[i].codeSize   = records[codeCanonical[i]].codeSize;
+        }
 
         if (reflCanonical[i] == i)
         {
@@ -205,8 +235,11 @@ std::vector<uint8_t> BlobWriter::finalize() const
         const auto& e = m_entries[i];
         out.insert(out.end(), e.key.begin(), e.key.end());
         out.push_back('\0');
-        padTo8(out);
-        out.insert(out.end(), e.code.begin(), e.code.end());
+        if (codeCanonical[i] == i)
+        {
+            padTo8(out);
+            out.insert(out.end(), e.code.begin(), e.code.end());
+        }
         if (reflCanonical[i] == i)
         {
             padTo8(out);
