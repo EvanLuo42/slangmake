@@ -50,6 +50,30 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
+    },
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-asan",
+      "inherits": "linux-base",
+      "displayName": "Linux Debug + ASan/UBSan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
     }
   ],
   "buildPresets": [
@@ -67,6 +91,11 @@
       "name": "windows-relwithdebinfo",
       "configurePreset": "windows-relwithdebinfo",
       "displayName": "Build (RelWithDebInfo)"
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan",
+      "displayName": "Build (Linux ASan/UBSan)"
     }
   ],
   "testPresets": [
@@ -82,6 +111,14 @@
       "name": "windows-relwithdebinfo",
       "configurePreset": "windows-relwithdebinfo",
       "displayName": "Test (RelWithDebInfo)",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan",
+      "displayName": "Test (Linux ASan/UBSan)",
       "output": {
         "outputOnFailure": true
       }

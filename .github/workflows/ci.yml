@@ -40,3 +40,40 @@ jobs:
 
       - name: Test
         run: ctest --preset windows-relwithdebinfo
+
+  sanitizers:
+    name: Build & test (Linux, ASan+UBSan)
+    runs-on: ubuntu-latest
+
+    # The Slang shared library is distributed pre-built, so ASan / UBSan only
+    # instrument slangmake's own code. Disable ASan's new/delete-mismatch and
+    # alloc-dealloc-mismatch checks because allocations flow across the
+    # instrumented/uninstrumented boundary (our code -> libslang.so). UBSan
+    # runs in halt-on-error mode so any UB escaping into CI fails the job.
+    env:
+      ASAN_OPTIONS: "detect_leaks=0:alloc_dealloc_mismatch=0:new_delete_type_mismatch=0:abort_on_error=1:symbolize=1"
+      UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang llvm
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/linux-asan/_deps
+          key: fetchcontent-${{ runner.os }}-asan-${{ hashFiles('cmake/Configure*.cmake', 'CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake --preset linux-asan
+
+      - name: Build
+        run: cmake --build --preset linux-asan
+
+      - name: Test
+        run: ctest --preset linux-asan

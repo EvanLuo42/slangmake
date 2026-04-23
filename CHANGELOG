@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- End-to-end CLI tests (`tests/test_cli.cpp`) that drive the built `slangmake` executable via `std::system` and cover `--version`, missing-arg errors, unknown targets, compile + `--dump` round-trip, missing / malformed blob handling, file-declared permutation expansion, `-P` overrides and `--dump-reflection`.
+- Linux ASan + UBSan CI job (`linux-asan` preset + `sanitizers` job in `.github/workflows/ci.yml`) exercising the full test suite on every push and PR.
+
+### Fixed
+- `BlobReader::at` and `BlobReader::dependencies` widened their offset + size bounds checks to `size_t` before adding, so a crafted entry record with `keyOffset = 0xFFFFFFF0, keySize = 0x20` can no longer wrap a `uint32_t` sum past `m_blob.size()` and read out of bounds.
+- `tests/test_include.cpp` now includes `<cstring>` explicitly so the `std::memcpy` call builds under libstdc++ / clang (MSVC's STL pulled it in transitively).
+
 ### Changed
 - `BlobWriter` now deduplicates identical bytecode payloads across entries via the same FNV-1a + full-compare scheme already used for reflection. Two permutations that produce byte-identical SPIR-V / DXIL (dead-stripped axes, reflection-only differences, etc.) now share one on-disk payload. Blob format is unchanged; readers see no behavioural difference.
 

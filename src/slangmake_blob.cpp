@@ -420,11 +420,18 @@ BlobReader::Entry BlobReader::at(size_t index) const
     const auto& r    = m_entries[index];
     const auto* blob = m_blob.data();
 
-    if (r.keyOffset + r.keySize <= m_blob.size() && r.keySize > 0)
+    auto inBounds = [sz = m_blob.size()](uint32_t off, uint32_t len) noexcept
+    {
+        // Widen to size_t before the add so a malicious (off,len) pair can't
+        // wrap past m_blob.size() via uint32 overflow.
+        return static_cast<size_t>(off) + static_cast<size_t>(len) <= sz;
+    };
+
+    if (r.keySize > 0 && inBounds(r.keyOffset, r.keySize))
         e.key = std::string_view(reinterpret_cast<const char*>(blob + r.keyOffset), r.keySize - 1);
-    if (r.codeOffset + r.codeSize <= m_blob.size())
+    if (inBounds(r.codeOffset, r.codeSize))
         e.code = std::span<const uint8_t>(blob + r.codeOffset, r.codeSize);
-    if (r.reflOffset + r.reflSize <= m_blob.size())
+    if (inBounds(r.reflOffset, r.reflSize))
         e.reflection = std::span<const uint8_t>(blob + r.reflOffset, r.reflSize);
     if (r.depsIdxCount > 0)
     {
@@ -475,8 +482,9 @@ std::vector<BlobReader::Dep> BlobReader::dependencies() const
     out.reserve(m_hdr->depsCount);
     for (uint32_t i = 0; i < m_hdr->depsCount; ++i)
     {
-        Dep d{};
-        if (deps[i].pathOffset + deps[i].pathSize <= m_blob.size())
+        Dep          d{};
+        const size_t end = static_cast<size_t>(deps[i].pathOffset) + static_cast<size_t>(deps[i].pathSize);
+        if (end <= m_blob.size())
             d.path =
                 std::string_view(reinterpret_cast<const char*>(m_blob.data() + deps[i].pathOffset), deps[i].pathSize);
         d.contentHash = deps[i].contentHash;
