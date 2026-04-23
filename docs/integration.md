@@ -1,16 +1,10 @@
 # Integration
 
-How to wire a slangmake blob into a shipping engine: loading, lookup,
-lifetime, pipeline-cache story, threading, memory. The "what do I do at
-runtime" companion to [cursor.md](cursor.md) (which covers *how* to use a
-parsed reflection to actually bind things) and
-[permutations.md](permutations.md) (which covers *how* to pick the right
-entry).
+How to wire a slangmake blob into a shipping engine: loading, lookup, lifetime, pipeline-cache story, threading, memory. The "what do I do at runtime" companion to [cursor.md](cursor.md) (which covers *how* to use a parsed reflection to actually bind things) and [permutations.md](permutations.md) (which covers *how* to pick the right entry).
 
 ## Shipping surface
 
-A slangmake-based pipeline needs three things on disk + two things in your
-binary:
+A slangmake-based pipeline needs three things on disk + two things in your binary:
 
 | What | Where | Typical size |
 | --- | --- | --- |
@@ -19,10 +13,7 @@ binary:
 | `slangmake-lib` (static) | Linked into your engine | ~50-100 KB |
 | Nothing else | — | No slang.dll, no slang-compiler.dll, no .slang source, no runtime JSON |
 
-Compared with the "ship Slang and compile at runtime" approach, you save
-~38 MB of DLLs (`slang-compiler.dll` alone is ~32 MB on Windows) and
-several tens to hundreds of milliseconds of cold-start time — see the
-summary at the bottom of this doc.
+Compared with the "ship Slang and compile at runtime" approach, you save ~38 MB of DLLs (`slang-compiler.dll` alone is ~32 MB on Windows) and several tens to hundreds of milliseconds of cold-start time — see the summary at the bottom of this doc.
 
 ## Loading
 
@@ -41,14 +32,9 @@ std::vector<uint8_t> bytes = loadMyAsset("shaders/tonemap.bin");
 BlobReader reader(std::move(bytes));
 ```
 
-In engines with an asset system already doing mmap, wrap the mapped region
-with overload (2) and keep the mapping alive for as long as the reader
-exists. In simpler engines, `openFile` is enough — it reads the file once
-and holds the bytes internally.
+In engines with an asset system already doing mmap, wrap the mapped region with overload (2) and keep the mapping alive for as long as the reader exists. In simpler engines, `openFile` is enough — it reads the file once and holds the bytes internally.
 
-If `compression` in the blob header is not `None`, the reader decompresses
-into an owned buffer once at construction; every subsequent `Entry` access
-is zero-copy into that buffer.
+If `compression` in the blob header is not `None`, the reader decompresses into an owned buffer once at construction; every subsequent `Entry` access is zero-copy into that buffer.
 
 ## Lookup and iteration
 
@@ -77,67 +63,38 @@ for (const auto& key : reader->enumerate()) { /* ... */ }
 
 ## Lifetime — hold the blob
 
-**Do not** drop the `BlobReader` or its underlying buffer after you've
-built your pipelines. You'll want the bytecode again on:
+**Do not** drop the `BlobReader` or its underlying buffer after you've built your pipelines. You'll want the bytecode again on:
 
-- **Device lost.** GPU crashes, driver updates, Windows `TDR` timeouts,
-  laptop GPU switching — all invalidate existing `VkPipeline` / PSO
-  objects. You rebuild them by calling `vkCreatePipeline` again, which
-  needs the SPIR-V. If you've freed it, you can only hard-restart.
-- **Pipeline recreation for validation layers / RenderDoc.** Some
-  capture tools reflectively rebuild pipelines to re-record state.
-- **Lazy pipeline creation.** Many engines create pipelines on first
-  use, not at startup. If the blob isn't live, the first-touch
-  materialisation path breaks.
+- **Device lost.** GPU crashes, driver updates, Windows `TDR` timeouts, laptop GPU switching — all invalidate existing `VkPipeline` / PSO objects. You rebuild them by calling `vkCreatePipeline` again, which needs the SPIR-V. If you've freed it, you can only hard-restart.
+- **Pipeline recreation for validation layers / RenderDoc.** Some capture tools reflectively rebuild pipelines to re-record state.
+- **Lazy pipeline creation.** Many engines create pipelines on first use, not at startup. If the blob isn't live, the first-touch materialisation path breaks.
 
-The cheap idiom is: `mmap` the blob once, leave it mapped for the lifetime
-of the device. Physical memory follows demand-paging — warm pages stay
-resident, cold ones drift back to disk. Measured cost is close to zero.
+The cheap idiom is: `mmap` the blob once, leave it mapped for the lifetime of the device. Physical memory follows demand-paging — warm pages stay resident, cold ones drift back to disk. Measured cost is close to zero.
 
 ## Relation to the graphics API's pipeline cache
 
-`VkPipelineCache` / `ID3D12PipelineLibrary` accelerates *repeat*
-`vkCreatePipeline` calls by caching the driver's compile from SPIR-V/DXIL
-to GPU-native instructions. It does **not** replace the source bytecode —
-on cache miss (first launch, new driver, new hardware) you still need the
-SPIR-V/DXIL in hand.
+`VkPipelineCache` / `ID3D12PipelineLibrary` accelerates *repeat* `vkCreatePipeline` calls by caching the driver's compile from SPIR-V/DXIL to GPU-native instructions. It does **not** replace the source bytecode — on cache miss (first launch, new driver, new hardware) you still need the SPIR-V/DXIL in hand.
 
 The two caches are complementary:
 
-- slangmake's blob holds the front-end work: source → target bytecode,
-  plus reflection.
-- The graphics API's pipeline cache holds the back-end work: target
-  bytecode → GPU instructions.
+- slangmake's blob holds the front-end work: source → target bytecode, plus reflection.
+- The graphics API's pipeline cache holds the back-end work: target bytecode → GPU instructions.
 
-Typical shipping flow: slangmake blob ships with the game, `VkPipelineCache`
-persists across runs in `%APPDATA%`. On a fresh install with a new driver,
-both come into play — the blob feeds bytecode to `vkCreatePipeline`, the
-cache miss triggers the driver to do GPU codegen once, and subsequent
-launches hit the persistent cache.
+Typical shipping flow: slangmake blob ships with the game, `VkPipelineCache` persists across runs in `%APPDATA%`. On a fresh install with a new driver, both come into play — the blob feeds bytecode to `vkCreatePipeline`, the cache miss triggers the driver to do GPU codegen once, and subsequent launches hit the persistent cache.
 
 ## Threading
 
-`BlobReader` and `ReflectionView` are read-only after construction. Every
-public method is a `const` method that touches only `const`-reachable
-state, so:
+`BlobReader` and `ReflectionView` are read-only after construction. Every public method is a `const` method that touches only `const`-reachable state, so:
 
-- Multiple threads may call `find`, `at`, `enumerate`, `dependencies`,
-  `optionsHash`, etc. on the same reader concurrently without
-  synchronisation.
-- `ReflectionView` shares this guarantee — multiple threads may each
-  build their own `ReflectionView` over the same reflection bytes, or
-  share one.
-- `Cursor` is a value type (≤256 bytes), trivially copyable. Passing
-  between threads is fine; each thread's navigation operates on its own
-  copy.
+- Multiple threads may call `find`, `at`, `enumerate`, `dependencies`, `optionsHash`, etc. on the same reader concurrently without synchronisation.
+- `ReflectionView` shares this guarantee — multiple threads may each build their own `ReflectionView` over the same reflection bytes, or share one.
+- `Cursor` is a value type (≤256 bytes), trivially copyable. Passing between threads is fine; each thread's navigation operates on its own copy.
 
-Writers (`BlobWriter`, `BatchCompiler`) are not thread-safe — but you
-should only be using those at build time, not in the shipping runtime.
+Writers (`BlobWriter`, `BatchCompiler`) are not thread-safe — but you should only be using those at build time, not in the shipping runtime.
 
 ## Size + startup budget
 
-Concrete comparison on a typical mid-size renderer (~300 shader variants,
-SPIR-V target):
+Concrete comparison on a typical mid-size renderer (~300 shader variants, SPIR-V target):
 
 |                             | slangmake blob | slang session |
 | --- | --- | --- |
@@ -147,30 +104,19 @@ SPIR-V target):
 | Runtime specialisation      | Not applicable (baked at compile time via permutations) | `composite->specialize()` → seconds on complex programs |
 | Device-lost rebuild         | `vkCreatePipeline` from blob bytecode → same cost as first build | Same, but requires the session + the source to still be loadable |
 
-The slang-session path is right when you genuinely need runtime
-specialisation (editor, shader hot-reload, user-authored shaders). Most
-shipping builds of most games don't — hence slangmake.
+The slang-session path is right when you genuinely need runtime specialisation (editor, shader hot-reload, user-authored shaders). Most shipping builds of most games don't — hence slangmake.
 
 ## Handling missing variants
 
-`reader->find(perm)` returns `std::nullopt` when the blob has no entry
-matching that key. Common causes and mitigations:
+`reader->find(perm)` returns `std::nullopt` when the blob has no entry matching that key. Common causes and mitigations:
 
-1. **Asked for an axis combination that was never compiled.**
-   Decide whether to fail hard (assert), fall back to a default
-   permutation, or recompile that cell on the fly (rare — would
-   require shipping Slang).
-2. **Spelling mismatch.** CLI override used `USE_SHADOW={1}` but runtime
-   looks up `{"UseShadow","1"}`. Use `reader->enumerate()` during
-   engine boot in debug builds to cross-check.
-3. **Type-axis value missing leading `|`.** The `Permutation::key()`
-   helper handles the prefix — build your lookup `Permutation` with
-   `typeArgs` populated, not by hand-constructing a key string.
+1. **Asked for an axis combination that was never compiled.** Decide whether to fail hard (assert), fall back to a default permutation, or recompile that cell on the fly (rare — would require shipping Slang).
+2. **Spelling mismatch.** CLI override used `USE_SHADOW={1}` but runtime looks up `{"UseShadow","1"}`. Use `reader->enumerate()` during engine boot in debug builds to cross-check.
+3. **Type-axis value missing leading `|`.** The `Permutation::key()` helper handles the prefix — build your lookup `Permutation` with `typeArgs` populated, not by hand-constructing a key string.
 
 ## Entry-point discovery
 
-A single blob entry may contain multiple entry points (vs / ps / cs in one
-module, ray-tracing hit groups, etc.). The reflection tells you which:
+A single blob entry may contain multiple entry points (vs / ps / cs in one module, ray-tracing hit groups, etc.). The reflection tells you which:
 
 ```cpp
 ReflectionView rv(entry->reflection);
@@ -180,8 +126,7 @@ for (const auto& ep : rv.decodedEntryPoints()) {
 }
 ```
 
-`ep.hash` is a stable 64-bit per-entry-point signature you can use as a
-cache key for API-level pipeline state objects.
+`ep.hash` is a stable 64-bit per-entry-point signature you can use as a cache key for API-level pipeline state objects.
 
 ## Picking a compression codec
 
@@ -191,28 +136,19 @@ cache key for API-level pipeline state objects.
 | `Codec::LZ4`  | Ship builds where load time matters more than size |
 | `Codec::Zstd` | Ship builds where package size matters more than load time |
 
-The reader decompresses once at open time into an owned buffer — so the
-choice is a startup-time vs on-disk-size trade. LZ4 decompresses at GB/s,
-Zstd is slower but compresses blobs noticeably smaller, often 2–3×.
+The reader decompresses once at open time into an owned buffer — so the choice is a startup-time vs on-disk-size trade. LZ4 decompresses at GB/s, Zstd is slower but compresses blobs noticeably smaller, often 2–3×.
 
 ## Hot-reload (dev only)
 
-slangmake doesn't do hot-reload directly — the blob is a frozen artefact.
-Typical dev-build pattern:
+slangmake doesn't do hot-reload directly — the blob is a frozen artefact. Typical dev-build pattern:
 
-1. **Editor build**: link the Slang runtime directly, use its
-   `ISession` + `ShaderCursor` APIs. Hot-reload re-parses source.
+1. **Editor build**: link the Slang runtime directly, use its `ISession` + `ShaderCursor` APIs. Hot-reload re-parses source.
 2. **Ship build**: link slangmake-lib, load the pre-built blob.
 
-The shader authoring code and Cursor-using bind code can share a common
-interface layer (both produce `(space, slot, offset, size)` bindings).
-The difference is the source of those numbers: live `ProgramLayout` at
-dev time, serialised `ReflectionView` at ship time.
+The shader authoring code and Cursor-using bind code can share a common interface layer (both produce `(space, slot, offset, size)` bindings). The difference is the source of those numbers: live `ProgramLayout` at dev time, serialised `ReflectionView` at ship time.
 
 ## See also
 
 - [cursor.md](cursor.md) for what to do with a parsed `ReflectionView`.
-- [permutations.md](permutations.md) for how to build the `Permutation`
-  you pass to `find`.
-- [reflection.md](reflection.md) if you need to go below the Cursor and
-  walk raw tables.
+- [permutations.md](permutations.md) for how to build the `Permutation` you pass to `find`.
+- [reflection.md](reflection.md) if you need to go below the Cursor and walk raw tables.

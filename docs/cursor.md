@@ -1,10 +1,6 @@
 # Cursor — binding resources from a slangmake blob
 
-`ReflectionView::Cursor` is a Slang-`ShaderCursor`-style navigator over the
-serialised reflection in a slangmake blob. It lets an engine answer "where
-does this shader variable live?" without a live Slang session: name/index
-navigation, accumulated per-category offsets and spaces, descriptor-set
-enumeration — all straight off the `.bin`.
+`ReflectionView::Cursor` is a Slang-`ShaderCursor`-style navigator over the serialised reflection in a slangmake blob. It lets an engine answer "where does this shader variable live?" without a live Slang session: name/index navigation, accumulated per-category offsets and spaces, descriptor-set enumeration — all straight off the `.bin`.
 
 ```cpp
 #include "slangmake.h"
@@ -32,19 +28,9 @@ memcpy(cbStaging + loc.offsetBytes, &rgba, loc.sizeBytes);
 
 ## Mental model
 
-Every Slang parameter binding is a bag of per-category `(offset, space)`
-pairs. A `Uniform` byte offset says "skip N bytes into the enclosing CB";
-a `DescriptorTableSlot` says "this is descriptor `offset` in descriptor set
-`space`"; `SubElementRegisterSpace` records the space shift introduced by a
-surrounding `ParameterBlock`. There are ~22 such categories in Slang's
-reflection model.
+Every Slang parameter binding is a bag of per-category `(offset, space)` pairs. A `Uniform` byte offset says "skip N bytes into the enclosing CB"; a `DescriptorTableSlot` says "this is descriptor `offset` in descriptor set `space`"; `SubElementRegisterSpace` records the space shift introduced by a surrounding `ParameterBlock`. There are ~22 such categories in Slang's reflection model.
 
-A `Cursor` carries two 32-wide arrays — one for accumulated offsets, one for
-accumulated spaces — plus a `typeLayoutIdx` pointing at the type at the
-current position. Each navigation step reads the traversed
-`VariableLayout`'s category list and **adds** its contribution to the
-arrays. At a leaf, you read back whichever category your binding model
-cares about.
+A `Cursor` carries two 32-wide arrays — one for accumulated offsets, one for accumulated spaces — plus a `typeLayoutIdx` pointing at the type at the current position. Each navigation step reads the traversed `VariableLayout`'s category list and **adds** its contribution to the arrays. At a leaf, you read back whichever category your binding model cares about.
 
 ```
 root  ──["gMat"]──►  ParameterBlock field
@@ -68,9 +54,7 @@ Three factory functions on `ReflectionView`:
 | `rv.entryPointCursor(i)` | Entry point `i`'s own parameter block (entry-point uniforms / varying I/O) |
 | `rv.findGlobalParam(name)` | Shorthand for `rv.rootCursor()[name]` |
 
-All three return a default-constructed invalid cursor when the blob carries
-no reflection, or when the entry-point index is out of range — no
-exceptions, no UB.
+All three return a default-constructed invalid cursor when the blob carries no reflection, or when the entry-point index is out of range — no exceptions, no UB.
 
 ```cpp
 auto root = rv.rootCursor();
@@ -91,11 +75,7 @@ Cursor operator[](const char* name) const;
 Cursor operator[](uint32_t index) const;
 ```
 
-`field` resolves a name against the current struct's `fieldLayoutPool`. Miss
-→ invalid cursor. `element` computes per-category strides from the element
-type's size pool and adds `index * stride[cat]` to each offset. Out-of-range
-indices are **not** bounds-checked against the static array length (Slang
-reports the length if you need it; see `types()[...].elementCount`).
+`field` resolves a name against the current struct's `fieldLayoutPool`. Miss → invalid cursor. `element` computes per-category strides from the element type's size pool and adds `index * stride[cat]` to each offset. Out-of-range indices are **not** bounds-checked against the static array length (Slang reports the length if you need it; see `types()[...].elementCount`).
 
 Two less-frequently-used navigators:
 
@@ -105,9 +85,7 @@ Cursor container() const;        // step onto the CB/PB container resource itsel
 Cursor explicitCounter() const;  // follow an AppendStructuredBuffer's counter VarLayout
 ```
 
-You will normally never call `dereference` yourself — see the next section.
-`container()` is what you call when you need the `(space, slot)` of the
-implicit constant buffer inside a `ParameterBlock`.
+You will normally never call `dereference` yourself — see the next section. `container()` is what you call when you need the `(space, slot)` of the implicit constant buffer inside a `ParameterBlock`.
 
 Chain freely:
 
@@ -119,24 +97,16 @@ rv.rootCursor()
 
 ## Auto-dereference
 
-`field()` and `element()` automatically unwrap container types —
-`ConstantBuffer<T>`, `ParameterBlock<T>`, `TextureBuffer<T>`,
-`ShaderStorageBuffer` — before looking up a member. So with:
+`field()` and `element()` automatically unwrap container types — `ConstantBuffer<T>`, `ParameterBlock<T>`, `TextureBuffer<T>`, `ShaderStorageBuffer` — before looking up a member. So with:
 
 ```slang
 struct Constants { float4 color; int mode; }
 ConstantBuffer<Constants> uConstants;
 ```
 
-you write `root["uConstants"]["color"]`, not
-`root["uConstants"].dereference()["color"]`. The cursor walks the outer
-`VarLayout` (grabbing the CB's descriptor slot) and then transparently
-descends into `T`'s layout (where `color` is at Uniform offset 0).
+you write `root["uConstants"]["color"]`, not `root["uConstants"].dereference()["color"]`. The cursor walks the outer `VarLayout` (grabbing the CB's descriptor slot) and then transparently descends into `T`'s layout (where `color` is at Uniform offset 0).
 
-If a caller genuinely wants the outer wrapper layer — e.g. to bind the
-backing `VkBuffer` of a PB's implicit CB — they call `container()`, which
-moves sideways onto the `containerVarLayout` instead of through to the
-element.
+If a caller genuinely wants the outer wrapper layer — e.g. to bind the backing `VkBuffer` of a PB's implicit CB — they call `container()`, which moves sideways onto the `containerVarLayout` instead of through to the element.
 
 ## Queries
 
@@ -158,11 +128,7 @@ uint32_t sizeFor(uint32_t category) const;    // size at the CURRENT type (not a
 uint32_t strideFor(uint32_t category) const;  // stride at the CURRENT type
 ```
 
-`offsetFor(SLANG_PARAMETER_CATEGORY_UNIFORM)` gives the accumulated byte
-offset into the enclosing constant buffer. `spaceFor(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT)`
-gives the Vulkan-style descriptor set — relative to the cursor's local
-scope, so inside a PB this is 0 until you also add the PB's register-space
-accumulators (use the convenience methods below for the combined value).
+`offsetFor(SLANG_PARAMETER_CATEGORY_UNIFORM)` gives the accumulated byte offset into the enclosing constant buffer. `spaceFor(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT)` gives the Vulkan-style descriptor set — relative to the cursor's local scope, so inside a PB this is 0 until you also add the PB's register-space accumulators (use the convenience methods below for the combined value).
 
 ### Convenience shortcuts
 
@@ -189,14 +155,9 @@ struct ResourceBinding {
 std::optional<ResourceBinding> resourceBinding() const;
 ```
 
-`uniformLocation` is exactly the memcpy destination for a CB write:
-`{offset, size}`. Writing a whole `Constants` struct at once? Use it on the
-CB's *element* cursor (`root["uConstants"].dereference()`).
+`uniformLocation` is exactly the memcpy destination for a CB write: `{offset, size}`. Writing a whole `Constants` struct at once? Use it on the CB's *element* cursor (`root["uConstants"].dereference()`).
 
-`resourceBinding` walks the current `VarLayout`'s category list, picks the
-first non-uniform category (the one that actually identifies a resource),
-and returns the **absolute** space (with PB register-space shifts folded
-in). Typical engine usage:
+`resourceBinding` walks the current `VarLayout`'s category list, picks the first non-uniform category (the one that actually identifies a resource), and returns the **absolute** space (with PB register-space shifts folded in). Typical engine usage:
 
 ```cpp
 auto bind = cursor.resourceBinding();
@@ -209,10 +170,7 @@ w.descriptorType = mapCategoryToVk(bind->category);
 
 ## Descriptor-set layout enumeration
 
-Navigation tells you where one thing lives. Allocating a
-`VkDescriptorSetLayout` or populating a D3D12 root-parameter table, though,
-needs the full inventory — how many CBVs, SRVs, UAVs, samplers sit in a
-given set. `Cursor::descriptorSetLayout()` returns exactly that:
+Navigation tells you where one thing lives. Allocating a `VkDescriptorSetLayout` or populating a D3D12 root-parameter table, though, needs the full inventory — how many CBVs, SRVs, UAVs, samplers sit in a given set. `Cursor::descriptorSetLayout()` returns exactly that:
 
 ```cpp
 struct DescriptorBindingInfo {
@@ -244,9 +202,7 @@ for (const auto& set : rv.rootCursor().descriptorSetLayout()) {
 }
 ```
 
-On a `ParameterBlock` cursor it returns that PB's sets (typically one
-primary set at absolute space = cursor's `descriptorSet()`, plus one per
-nested sub-object).
+On a `ParameterBlock` cursor it returns that PB's sets (typically one primary set at absolute space = cursor's `descriptorSet()`, plus one per nested sub-object).
 
 ## End-to-end: binding a ParameterBlock
 
@@ -301,33 +257,15 @@ vkCmdBindDescriptorSets(cmd, pipeline, /* firstSet */ cbBind.space, 1,
                         &mySets[cbBind.space], 0, nullptr);
 ```
 
-Everything here is pure lookup into a memory-mapped `.bin` — no Slang
-runtime, no JSON, no allocations on the hot path.
+Everything here is pure lookup into a memory-mapped `.bin` — no Slang runtime, no JSON, no allocations on the hot path.
 
 ## Limitations
 
-The Cursor handles every binding shape that can be **fully determined at
-compile time**. It cannot do:
+The Cursor handles every binding shape that can be **fully determined at compile time**. It cannot do:
 
-- **Runtime specialisation of generics / interfaces.** Slang's
-  `IShaderObject::setObject(slot, concreteImpl)` for an interface-typed
-  slot requires the compiler to specialise and re-codegen at bind time.
-  slangmake's model bakes the axis as a `[permutation type]` instead, so
-  `rv.rootCursor()["gMat"]` is already the specialised cursor for the
-  variant you looked up. If you need to change the concrete type, you
-  switch to a different blob entry — you do not reconfigure the cursor.
-- **Runtime `specialize()`.** Same reason. The serialised layout is a
-  frozen snapshot of one specialisation; there is no IR to re-mix.
-- **Slang `ShaderCursor`'s `setData` / `setResource` / `setObject` calls.**
-  The Cursor tells you *where* to bind — it does not own any graphics-API
-  resources or descriptor sets, so it can't write to them. Your engine
-  issues the `vkUpdateDescriptorSets` / `vkCmdPushConstants` / `memcpy`
-  based on the Cursor's readings.
-- **Entry-point generic parameters.** Currently unsupported end-to-end —
-  only module-scope `type_param` declarations participate in the
-  permutation system.
+- **Runtime specialisation of generics / interfaces.** Slang's `IShaderObject::setObject(slot, concreteImpl)` for an interface-typed slot requires the compiler to specialise and re-codegen at bind time. slangmake's model bakes the axis as a `[permutation type]` instead, so `rv.rootCursor()["gMat"]` is already the specialised cursor for the variant you looked up. If you need to change the concrete type, you switch to a different blob entry — you do not reconfigure the cursor.
+- **Runtime `specialize()`.** Same reason. The serialised layout is a frozen snapshot of one specialisation; there is no IR to re-mix.
+- **Slang `ShaderCursor`'s `setData` / `setResource` / `setObject` calls.** The Cursor tells you *where* to bind — it does not own any graphics-API resources or descriptor sets, so it can't write to them. Your engine issues the `vkUpdateDescriptorSets` / `vkCmdPushConstants` / `memcpy` based on the Cursor's readings.
+- **Entry-point generic parameters.** Currently unsupported end-to-end — only module-scope `type_param` declarations participate in the permutation system.
 
-Everything else Slang's ShaderCursor can reach — struct navigation, array
-indexing, ParameterBlock sub-spaces, ConstantBuffer deref, AppendStructured-
-Buffer counters, array-of-textures strides, entry-point uniforms,
-push-constant offsets — the Cursor reaches too.
+Everything else Slang's ShaderCursor can reach — struct navigation, array indexing, ParameterBlock sub-spaces, ConstantBuffer deref, AppendStructuredBuffer counters, array-of-textures strides, entry-point uniforms, push-constant offsets — the Cursor reaches too.

@@ -1,26 +1,14 @@
 # Raw reflection
 
-When the [Cursor](cursor.md) isn't enough — custom analyses, binding
-validation, IDE tooling, codegen from reflection, anything that walks the
-shader graph by shape rather than by name — you drop down to the raw
-reflection tables exposed by `ReflectionView`. This doc is the map.
+When the [Cursor](cursor.md) isn't enough — custom analyses, binding validation, IDE tooling, codegen from reflection, anything that walks the shader graph by shape rather than by name — you drop down to the raw reflection tables exposed by `ReflectionView`. This doc is the map.
 
-The Cursor is built on top of exactly these tables; if something the
-Cursor can do looks magical, you can replicate it here.
+The Cursor is built on top of exactly these tables; if something the Cursor can do looks magical, you can replicate it here.
 
 ## Table-index model
 
-Every record references others by `uint32_t` index into a fixed-stride
-table. Nothing is a pointer, nothing is a string inside a record —
-strings are indices into a single interned pool, and repeated integer
-lists (struct field indices, per-entry child lists, per-category offset
-tuples) are indices into one shared `u32Pool`. The invariant `u32 == -1`
-(`fmt::kInvalidIndex`) means "absent"; always test before dereferencing.
+Every record references others by `uint32_t` index into a fixed-stride table. Nothing is a pointer, nothing is a string inside a record — strings are indices into a single interned pool, and repeated integer lists (struct field indices, per-entry child lists, per-category offset tuples) are indices into one shared `u32Pool`. The invariant `u32 == -1` (`fmt::kInvalidIndex`) means "absent"; always test before dereferencing.
 
-The upshot is that `ReflectionView` is pure zero-copy — every accessor
-is a `std::span` into the decompressed reflection bytes, with no heap
-allocations. You can safely traverse reflection from a hot frame without
-worrying about per-call cost.
+The upshot is that `ReflectionView` is pure zero-copy — every accessor is a `std::span` into the decompressed reflection bytes, with no heap allocations. You can safely traverse reflection from a hot frame without worrying about per-call cost.
 
 ## The tables
 
@@ -61,10 +49,7 @@ Names live in a single NUL-separated pool. Get one by string index:
 std::string_view s = rv.string(idx);   // empty when idx == kInvalidIndex
 ```
 
-`hashedStrings()` is a parallel table of `{strIdx, hash}` pairs — Slang
-reports pre-hashed copies of every "interesting" name (field, variable,
-attribute) so you can build an `unordered_map` keyed by `hash` directly
-instead of rehashing each `string_view` at query time. Typical use:
+`hashedStrings()` is a parallel table of `{strIdx, hash}` pairs — Slang reports pre-hashed copies of every "interesting" name (field, variable, attribute) so you can build an `unordered_map` keyed by `hash` directly instead of rehashing each `string_view` at query time. Typical use:
 
 ```cpp
 auto hs = rv.hashedStrings();
@@ -78,8 +63,7 @@ if (it != index.end()) { auto name = rv.hashedString(it->second); ... }
 
 ## The u32Pool convention
 
-Many records store "an offset + a count into `u32Pool`" to reference a
-variable-length list. Examples:
+Many records store "an offset + a count into `u32Pool`" to reference a variable-length list. Examples:
 
 | Field | Pool slice contains |
 | --- | --- |
@@ -94,8 +78,7 @@ variable-length list. Examples:
 | `Generic.constraintPoolOff / constraintCount` | flat list of `(typeParamIdx, constraintTypeIdx)` pairs |
 | `EntryRecord.depsIdxOff / depsIdxCount` | indices into the blob-level `DepEntry[]` (per-entry dep tracking) |
 
-Always bounds-check against `u32Pool().size()` before reading — mangled
-or truncated blobs should be detected, not crashed on.
+Always bounds-check against `u32Pool().size()` before reading — mangled or truncated blobs should be detected, not crashed on.
 
 ## Walking a struct type
 
@@ -134,17 +117,11 @@ for (uint32_t i = 0; i < vl.categoryCount; ++i) {
 }
 ```
 
-The `offset` semantics depend on the category — bytes for `Uniform`,
-slot index for `DescriptorTableSlot`, etc. Size / stride / alignment for
-the *type* along the same category are in the parallel
-`TypeLayout.sizePool` triplet.
+The `offset` semantics depend on the category — bytes for `Uniform`, slot index for `DescriptorTableSlot`, etc. Size / stride / alignment for the *type* along the same category are in the parallel `TypeLayout.sizePool` triplet.
 
 ## Walking the decl tree
 
-`decls()` is the module's declaration tree, root-first. Root is at index
-0 when present. Each record carries kind, name, payload index into an
-auxiliary table (struct body, function body, etc. — consult `Decl.kind`),
-and a `(childOff, childCount)` slice into `u32Pool` with children.
+`decls()` is the module's declaration tree, root-first. Root is at index 0 when present. Each record carries kind, name, payload index into an auxiliary table (struct body, function body, etc. — consult `Decl.kind`), and a `(childOff, childCount)` slice into `u32Pool` with children.
 
 ```cpp
 auto pool = rv.u32Pool();
@@ -159,8 +136,7 @@ if (auto root = rv.rootDecl()) walk(0);
 
 ## Binding / descriptor / sub-object ranges
 
-`TypeLayout` records carry three parallel tables for container types (CB,
-PB, struct, TextureBuffer, SSB):
+`TypeLayout` records carry three parallel tables for container types (CB, PB, struct, TextureBuffer, SSB):
 
 ```
 tl.bindingRangeOff / bindingRangeCount   → bindingRanges()
@@ -168,9 +144,7 @@ tl.descriptorSetOff / descriptorSetCount → descriptorSets()
 tl.subObjectRangeOff / subObjectRangeCount → subObjectRanges()
 ```
 
-These model the same information Slang exposes under
-`TypeLayoutReflection::getBindingRangeType`, `getDescriptorSetCount`, and
-`getSubObjectRangeCount`. Typical use:
+These model the same information Slang exposes under `TypeLayoutReflection::getBindingRangeType`, `getDescriptorSetCount`, and `getSubObjectRangeCount`. Typical use:
 
 ```cpp
 const auto& tl     = rv.typeLayouts()[pbLayoutIdx];
@@ -186,17 +160,11 @@ for (uint32_t i = 0; i < tl.descriptorSetCount; ++i) {
 }
 ```
 
-`SubObjectRange` records connect a `BindingRange` to a space offset — this
-is what lets the Cursor compute the absolute space of a resource inside a
-nested `ParameterBlock`. The record's `bindingRangeIndex` points back into
-`bindingRanges()`; `spaceOffset` is the sub-object's space delta;
-`offsetVarLayoutIdx` gives you the `VarLayout` whose offsets you'd apply
-when descending.
+`SubObjectRange` records connect a `BindingRange` to a space offset — this is what lets the Cursor compute the absolute space of a resource inside a nested `ParameterBlock`. The record's `bindingRangeIndex` points back into `bindingRanges()`; `spaceOffset` is the sub-object's space delta; `offsetVarLayoutIdx` gives you the `VarLayout` whose offsets you'd apply when descending.
 
 ## Entry points
 
-Each `EntryPoint` record has everything needed for a pipeline-builder's
-per-stage setup:
+Each `EntryPoint` record has everything needed for a pipeline-builder's per-stage setup:
 
 ```cpp
 for (const auto& ep : rv.entryPoints()) {
@@ -214,14 +182,11 @@ for (const auto& ep : rv.entryPoints()) {
 }
 ```
 
-`decodedEntryPoints()` is a convenience wrapper that materialises this
-into a vector of structs with the Cursor-style `Param` decoded — use it
-for simple cases, drop to the raw table for bulk analysis.
+`decodedEntryPoints()` is a convenience wrapper that materialises this into a vector of structs with the Cursor-style `Param` decoded — use it for simple cases, drop to the raw table for bulk analysis.
 
 ## Attributes
 
-User-written `[attrName(args...)]` attributes are reachable from
-`Variable.attrOff / attrCount` and `Function.attrOff / attrCount`:
+User-written `[attrName(args...)]` attributes are reachable from `Variable.attrOff / attrCount` and `Function.attrOff / attrCount`:
 
 ```cpp
 const auto& v = rv.variables()[varIdx];
@@ -242,22 +207,15 @@ for (uint32_t i = 0; i < v.attrCount; ++i) {
 }
 ```
 
-Slang emits its built-in `[shader(...)]` and `[numthreads(...)]`
-attributes via dedicated reflection APIs rather than
-`getUserAttribute*` — those land in `EntryPoint.stage` and
-`EntryPoint.threadGroupSize*` respectively, not in this user-attribute
-table.
+Slang emits its built-in `[shader(...)]` and `[numthreads(...)]` attributes via dedicated reflection APIs rather than `getUserAttribute*` — those land in `EntryPoint.stage` and `EntryPoint.threadGroupSize*` respectively, not in this user-attribute table.
 
 ## Correlating types and layouts
 
-One `Type` can have many `TypeLayout`s (per compile target + rule set),
-but in practice slangmake emits one per (type, layout-rules) combination.
-The forward edges you care about:
+One `Type` can have many `TypeLayout`s (per compile target + rule set), but in practice slangmake emits one per (type, layout-rules) combination. The forward edges you care about:
 
 - `Variable.typeIdx` → `Type`
 - `VarLayout.varIdx` → `Variable`
-- `VarLayout.typeLayoutIdx` → `TypeLayout` (the one *specific to this
-  variable's binding context*)
+- `VarLayout.typeLayoutIdx` → `TypeLayout` (the one *specific to this variable's binding context*)
 - `TypeLayout.typeIdx` → `Type`
 
 So going from a var layout to the underlying type name is:
@@ -282,22 +240,13 @@ These helpers are there for the common 95%:
 Reach for the raw tables when:
 
 - You're walking the whole module structure, not just one variable.
-- You need the relationships across multiple records (e.g. "find every
-  `VarLayout` whose `TypeLayout`'s `kind` is `ShaderResource` **and**
-  whose owning `Variable` has a specific user attribute").
-- You're generating offline code (C++ bind headers, rust-style FFI
-  stubs, shader linting rules).
-- You care about the `SubObjectRange` / `BindingRange` structure
-  directly because you're implementing a non-trivial descriptor set
-  allocator.
+- You need the relationships across multiple records (e.g. "find every `VarLayout` whose `TypeLayout`'s `kind` is `ShaderResource` **and** whose owning `Variable` has a specific user attribute").
+- You're generating offline code (C++ bind headers, rust-style FFI stubs, shader linting rules).
+- You care about the `SubObjectRange` / `BindingRange` structure directly because you're implementing a non-trivial descriptor set allocator.
 
-Every Cursor fact is derivable from the raw tables; the raw tables
-contain facts the Cursor doesn't expose (binding ranges for custom
-allocators, sub-object range spaceOffsets for non-PB existentials, etc.).
+Every Cursor fact is derivable from the raw tables; the raw tables contain facts the Cursor doesn't expose (binding ranges for custom allocators, sub-object range spaceOffsets for non-PB existentials, etc.).
 
 ## See also
 
-- [cursor.md](cursor.md) — how to not write this code if you don't
-  have to.
-- The `fmt::*` struct definitions in `include/slangmake.h` are the
-  ground truth for every field mentioned here.
+- [cursor.md](cursor.md) — how to not write this code if you don't have to.
+- The `fmt::*` struct definitions in `include/slangmake.h` are the ground truth for every field mentioned here.
