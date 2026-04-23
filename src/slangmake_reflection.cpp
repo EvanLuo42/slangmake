@@ -1168,4 +1168,501 @@ ReflectionView::DeclNode ReflectionView::decl(uint32_t idx) const
     return n;
 }
 
+// ---------------------------------------------------------------------------
+// Cursor
+//
+// A zero-copy navigator over the serialized reflection tables. Each step along
+// a VariableLayout accumulates per-category (offset, space) pairs into the
+// cursor's two 32-wide arrays; callers read them back at the leaf.
+// ---------------------------------------------------------------------------
+
+void ReflectionView::Cursor::applyVarLayout(uint32_t vlIdx)
+{
+    if (!m_rv || vlIdx == fmt::kInvalidIndex)
+        return;
+    auto vls = m_rv->varLayouts();
+    if (vlIdx >= vls.size())
+        return;
+    const auto& vl   = vls[vlIdx];
+    auto        pool = m_rv->u32Pool();
+    for (uint32_t i = 0; i < vl.categoryCount; ++i)
+    {
+        if (vl.categoryPoolOff + i >= pool.size())
+            break;
+        uint32_t cat = pool[vl.categoryPoolOff + i];
+        if (cat >= kMaxCategory)
+            continue;
+        uint32_t off = (vl.offsetPoolOff + i < pool.size()) ? pool[vl.offsetPoolOff + i] : 0;
+        uint32_t spc = (vl.bindingSpacePoolOff + i < pool.size()) ? pool[vl.bindingSpacePoolOff + i] : 0;
+        m_offsets[cat] += off;
+        m_spaces[cat] += spc;
+    }
+    m_typeLayoutIdx = vl.typeLayoutIdx;
+    m_varLayoutIdx  = vlIdx;
+}
+
+void ReflectionView::Cursor::autoDereference()
+{
+    if (!m_rv)
+        return;
+    auto tls = m_rv->typeLayouts();
+    // Unwrap a chain of container types — in practice at most one or two
+    // layers, but loop to be safe against ConstantBuffer<ConstantBuffer<T>>
+    // -style oddities.
+    for (int guard = 0; guard < 8; ++guard)
+    {
+        if (m_typeLayoutIdx >= tls.size())
+            return;
+        const auto& tl   = tls[m_typeLayoutIdx];
+        using TK         = slang::TypeReflection::Kind;
+        auto kind        = static_cast<TK>(tl.kind);
+        bool isContainer = (kind == TK::ConstantBuffer) || (kind == TK::ParameterBlock) ||
+                           (kind == TK::TextureBuffer) || (kind == TK::ShaderStorageBuffer);
+        if (!isContainer)
+            return;
+
+        // elementVarLayout carries the per-category offsets of T inside the
+        // container. applyVarLayout repoints m_typeLayoutIdx at the element
+        // layout as a side effect.
+        uint32_t evl = tl.elementVarLayoutIdx;
+        uint32_t etl = tl.elementTypeLayoutIdx;
+        if (evl != fmt::kInvalidIndex)
+        {
+            applyVarLayout(evl);
+        }
+        else if (etl != fmt::kInvalidIndex)
+        {
+            m_typeLayoutIdx = etl;
+            m_varLayoutIdx  = fmt::kInvalidIndex;
+        }
+        else
+        {
+            return;
+        }
+    }
+}
+
+ReflectionView::Cursor ReflectionView::Cursor::field(std::string_view name) const
+{
+    Cursor c = *this;
+    if (!c.valid())
+        return {};
+    c.autoDereference();
+
+    auto tls = c.m_rv->typeLayouts();
+    if (c.m_typeLayoutIdx >= tls.size())
+        return {};
+    const auto& tl = tls[c.m_typeLayoutIdx];
+    using TK       = slang::TypeReflection::Kind;
+    if (static_cast<TK>(tl.kind) != TK::Struct)
+        return {};
+
+    auto pool = c.m_rv->u32Pool();
+    auto vls  = c.m_rv->varLayouts();
+    auto vars = c.m_rv->variables();
+    for (uint32_t i = 0; i < tl.fieldCount; ++i)
+    {
+        if (tl.fieldLayoutPoolOff + i >= pool.size())
+            break;
+        uint32_t fieldVlIdx = pool[tl.fieldLayoutPoolOff + i];
+        if (fieldVlIdx >= vls.size())
+            continue;
+        uint32_t fieldVarIdx = vls[fieldVlIdx].varIdx;
+        if (fieldVarIdx >= vars.size())
+            continue;
+        auto fieldName = c.m_rv->string(vars[fieldVarIdx].nameStrIdx);
+        if (fieldName == name)
+        {
+            c.applyVarLayout(fieldVlIdx);
+            return c;
+        }
+    }
+    return {};
+}
+
+ReflectionView::Cursor ReflectionView::Cursor::element(uint32_t index) const
+{
+    Cursor c = *this;
+    if (!c.valid())
+        return {};
+    c.autoDereference();
+
+    auto tls = c.m_rv->typeLayouts();
+    if (c.m_typeLayoutIdx >= tls.size())
+        return {};
+    const auto& tl = tls[c.m_typeLayoutIdx];
+    using TK       = slang::TypeReflection::Kind;
+    if (static_cast<TK>(tl.kind) != TK::Array)
+        return {};
+    if (tl.elementTypeLayoutIdx >= tls.size())
+        return {};
+
+    // Stride per category lives at sizePoolOff + i*3 + 1 (pool triplet is
+    // size, stride, alignment).
+    const auto& etl  = tls[tl.elementTypeLayoutIdx];
+    auto        pool = c.m_rv->u32Pool();
+    for (uint32_t i = 0; i < etl.categoryCount; ++i)
+    {
+        if (etl.categoryPoolOff + i >= pool.size())
+            break;
+        uint32_t cat = pool[etl.categoryPoolOff + i];
+        if (cat >= kMaxCategory)
+            continue;
+        uint32_t stride = (etl.sizePoolOff + i * 3 + 1 < pool.size()) ? pool[etl.sizePoolOff + i * 3 + 1] : 0;
+        c.m_offsets[cat] += index * stride;
+    }
+    c.m_typeLayoutIdx = tl.elementTypeLayoutIdx;
+    c.m_varLayoutIdx  = fmt::kInvalidIndex;
+    return c;
+}
+
+ReflectionView::Cursor ReflectionView::Cursor::dereference() const
+{
+    Cursor c = *this;
+    if (!c.valid())
+        return {};
+    auto tls = c.m_rv->typeLayouts();
+    if (c.m_typeLayoutIdx >= tls.size())
+        return {};
+    const auto& tl = tls[c.m_typeLayoutIdx];
+    if (tl.elementVarLayoutIdx != fmt::kInvalidIndex)
+    {
+        c.applyVarLayout(tl.elementVarLayoutIdx);
+    }
+    else if (tl.elementTypeLayoutIdx != fmt::kInvalidIndex)
+    {
+        c.m_typeLayoutIdx = tl.elementTypeLayoutIdx;
+        c.m_varLayoutIdx  = fmt::kInvalidIndex;
+    }
+    else
+    {
+        return {};
+    }
+    return c;
+}
+
+ReflectionView::Cursor ReflectionView::Cursor::explicitCounter() const
+{
+    Cursor c = *this;
+    if (!c.valid())
+        return {};
+    auto tls = c.m_rv->typeLayouts();
+    if (c.m_typeLayoutIdx >= tls.size())
+        return {};
+    const auto& tl = tls[c.m_typeLayoutIdx];
+    if (tl.explicitCounterVarLayoutIdx == fmt::kInvalidIndex)
+        return {};
+    c.applyVarLayout(tl.explicitCounterVarLayoutIdx);
+    return c;
+}
+
+ReflectionView::Cursor ReflectionView::Cursor::container() const
+{
+    Cursor c = *this;
+    if (!c.valid())
+        return {};
+    auto tls = c.m_rv->typeLayouts();
+    if (c.m_typeLayoutIdx >= tls.size())
+        return {};
+    const auto& tl   = tls[c.m_typeLayoutIdx];
+    using TK         = slang::TypeReflection::Kind;
+    auto kind        = static_cast<TK>(tl.kind);
+    bool isContainer = (kind == TK::ConstantBuffer) || (kind == TK::ParameterBlock) || (kind == TK::TextureBuffer) ||
+                       (kind == TK::ShaderStorageBuffer);
+    if (!isContainer)
+        return {};
+    if (tl.containerVarLayoutIdx == fmt::kInvalidIndex)
+        return {};
+    c.applyVarLayout(tl.containerVarLayoutIdx);
+    return c;
+}
+
+std::string_view ReflectionView::Cursor::name() const
+{
+    if (!valid() || m_varLayoutIdx == fmt::kInvalidIndex)
+        return {};
+    auto vls = m_rv->varLayouts();
+    if (m_varLayoutIdx >= vls.size())
+        return {};
+    uint32_t varIdx = vls[m_varLayoutIdx].varIdx;
+    auto     vars   = m_rv->variables();
+    if (varIdx >= vars.size())
+        return {};
+    return m_rv->string(vars[varIdx].nameStrIdx);
+}
+
+uint32_t ReflectionView::Cursor::typeKind() const
+{
+    if (!valid())
+        return 0;
+    auto tls = m_rv->typeLayouts();
+    if (m_typeLayoutIdx >= tls.size())
+        return 0;
+    return tls[m_typeLayoutIdx].kind;
+}
+
+uint32_t ReflectionView::Cursor::offsetFor(uint32_t category) const
+{
+    return (category < kMaxCategory) ? m_offsets[category] : 0;
+}
+
+uint32_t ReflectionView::Cursor::spaceFor(uint32_t category) const
+{
+    return (category < kMaxCategory) ? m_spaces[category] : 0;
+}
+
+namespace
+{
+
+// Walk the (category, size, stride, alignment) pool on a TypeLayout and
+// return the triplet index for `category`, or -1 if absent.
+int findCategoryIndex(const ReflectionView* rv, const fmt::TypeLayout& tl, uint32_t category)
+{
+    auto pool = rv->u32Pool();
+    for (uint32_t i = 0; i < tl.categoryCount; ++i)
+    {
+        if (tl.categoryPoolOff + i >= pool.size())
+            return -1;
+        if (pool[tl.categoryPoolOff + i] == category)
+            return static_cast<int>(i);
+    }
+    return -1;
+}
+
+} // namespace
+
+uint32_t ReflectionView::Cursor::sizeFor(uint32_t category) const
+{
+    if (!valid())
+        return 0;
+    auto tls = m_rv->typeLayouts();
+    if (m_typeLayoutIdx >= tls.size())
+        return 0;
+    const auto& tl  = tls[m_typeLayoutIdx];
+    int         idx = findCategoryIndex(m_rv, tl, category);
+    if (idx < 0)
+        return 0;
+    auto pool = m_rv->u32Pool();
+    return (tl.sizePoolOff + idx * 3 < pool.size()) ? pool[tl.sizePoolOff + idx * 3] : 0;
+}
+
+uint32_t ReflectionView::Cursor::strideFor(uint32_t category) const
+{
+    if (!valid())
+        return 0;
+    auto tls = m_rv->typeLayouts();
+    if (m_typeLayoutIdx >= tls.size())
+        return 0;
+    const auto& tl  = tls[m_typeLayoutIdx];
+    int         idx = findCategoryIndex(m_rv, tl, category);
+    if (idx < 0)
+        return 0;
+    auto pool = m_rv->u32Pool();
+    return (tl.sizePoolOff + idx * 3 + 1 < pool.size()) ? pool[tl.sizePoolOff + idx * 3 + 1] : 0;
+}
+
+uint32_t ReflectionView::Cursor::uniformOffset() const { return offsetFor(SLANG_PARAMETER_CATEGORY_UNIFORM); }
+uint32_t ReflectionView::Cursor::descriptorSlot() const
+{
+    return offsetFor(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);
+}
+uint32_t ReflectionView::Cursor::descriptorSet() const
+{
+    // The descriptor set index of a leaf is the sum of spaces accumulated
+    // along the path: the DescriptorTableSlot's own space (from the VarLayout
+    // that introduced it) plus every RegisterSpace / SubElementRegisterSpace
+    // offset applied by an enclosing ParameterBlock.
+    return spaceFor(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT) +
+           offsetFor(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE) +
+           offsetFor(SLANG_PARAMETER_CATEGORY_REGISTER_SPACE);
+}
+
+ReflectionView::Cursor::UniformLocation ReflectionView::Cursor::uniformLocation() const
+{
+    UniformLocation u{};
+    u.offsetBytes = uniformOffset();
+    u.sizeBytes   = sizeFor(SLANG_PARAMETER_CATEGORY_UNIFORM);
+    return u;
+}
+
+std::optional<ReflectionView::Cursor::ResourceBinding> ReflectionView::Cursor::resourceBinding() const
+{
+    // The space reported for any leaf binding must include the register-space
+    // shifts contributed by enclosing containers — chiefly ParameterBlock's
+    // SubElementRegisterSpace and any explicit RegisterSpace. Without this,
+    // resources inside a PB would appear to live in space 0.
+    auto absoluteSpace = [this](uint32_t cat)
+    {
+        return m_spaces[cat] + offsetFor(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE) +
+               offsetFor(SLANG_PARAMETER_CATEGORY_REGISTER_SPACE);
+    };
+
+    if (!valid())
+        return std::nullopt;
+
+    if (m_varLayoutIdx == fmt::kInvalidIndex)
+    {
+        // After an array step there is no owning VarLayout to key off of, so
+        // inspect the current TypeLayout's categories instead. This preserves
+        // legitimate slot-0 / space-0 bindings (common for `[0]` on a resource
+        // array), which would otherwise look indistinguishable from "unset" if
+        // we only scanned the accumulated offset arrays for non-zero values.
+        auto tls  = m_rv->typeLayouts();
+        auto pool = m_rv->u32Pool();
+        if (m_typeLayoutIdx < tls.size())
+        {
+            const auto& tl = tls[m_typeLayoutIdx];
+            for (uint32_t i = 0; i < tl.categoryCount; ++i)
+            {
+                if (tl.categoryPoolOff + i >= pool.size())
+                    break;
+                uint32_t cat = pool[tl.categoryPoolOff + i];
+                if (cat == SLANG_PARAMETER_CATEGORY_UNIFORM || cat == SLANG_PARAMETER_CATEGORY_NONE ||
+                    cat == SLANG_PARAMETER_CATEGORY_MIXED)
+                    continue;
+                if (cat >= kMaxCategory)
+                    continue;
+                ResourceBinding rb{};
+                rb.space    = absoluteSpace(cat);
+                rb.index    = m_offsets[cat];
+                rb.category = cat;
+                return rb;
+            }
+        }
+
+        // Older / unexpected layouts may not surface a per-type category list.
+        // Keep the broad fallback so we still return something sensible when a
+        // non-uniform category was accumulated but not attributed to a layout.
+        for (uint32_t cat = 0; cat < kMaxCategory; ++cat)
+        {
+            if (cat == SLANG_PARAMETER_CATEGORY_UNIFORM || cat == SLANG_PARAMETER_CATEGORY_NONE ||
+                cat == SLANG_PARAMETER_CATEGORY_MIXED)
+                continue;
+            if (m_offsets[cat] == 0 && m_spaces[cat] == 0)
+                continue;
+            ResourceBinding rb{};
+            rb.space    = absoluteSpace(cat);
+            rb.index    = m_offsets[cat];
+            rb.category = cat;
+            return rb;
+        }
+        return std::nullopt;
+    }
+
+    // Pick the first non-uniform category on the current VarLayout. This
+    // mirrors what most engines do when translating a slang binding to a
+    // Vulkan/D3D12 descriptor write.
+    auto vls = m_rv->varLayouts();
+    if (m_varLayoutIdx >= vls.size())
+        return std::nullopt;
+    const auto& vl   = vls[m_varLayoutIdx];
+    auto        pool = m_rv->u32Pool();
+    for (uint32_t i = 0; i < vl.categoryCount; ++i)
+    {
+        if (vl.categoryPoolOff + i >= pool.size())
+            break;
+        uint32_t cat = pool[vl.categoryPoolOff + i];
+        if (cat == SLANG_PARAMETER_CATEGORY_UNIFORM || cat == SLANG_PARAMETER_CATEGORY_NONE ||
+            cat == SLANG_PARAMETER_CATEGORY_MIXED)
+            continue;
+        if (cat >= kMaxCategory)
+            continue;
+        ResourceBinding rb{};
+        rb.space    = absoluteSpace(cat);
+        rb.index    = m_offsets[cat];
+        rb.category = cat;
+        return rb;
+    }
+    return std::nullopt;
+}
+
+ReflectionView::Cursor ReflectionView::rootCursor() const
+{
+    Cursor c;
+    if (!m_hdr || m_hdr->globalParamsVarLayoutIdx == fmt::kInvalidIndex)
+        return c;
+    auto vls = varLayouts();
+    if (m_hdr->globalParamsVarLayoutIdx >= vls.size())
+        return c;
+    c.m_rv = this;
+    // Start at the global VarLayout and apply its own offsets (usually zero
+    // but not structurally guaranteed — the serializer copies whatever Slang
+    // reports for getGlobalParamsVarLayout()).
+    c.applyVarLayout(m_hdr->globalParamsVarLayoutIdx);
+    return c;
+}
+
+ReflectionView::Cursor ReflectionView::entryPointCursor(uint32_t entryPointIndex) const
+{
+    Cursor c;
+    auto   eps = entryPoints();
+    if (entryPointIndex >= eps.size())
+        return c;
+    const auto& ep = eps[entryPointIndex];
+    if (ep.varLayoutIdx == fmt::kInvalidIndex)
+        return c;
+    c.m_rv = this;
+    c.applyVarLayout(ep.varLayoutIdx);
+    return c;
+}
+
+ReflectionView::Cursor ReflectionView::findGlobalParam(std::string_view name) const { return rootCursor().field(name); }
+
+std::vector<ReflectionView::Cursor::DescriptorSetInfo> ReflectionView::Cursor::descriptorSetLayout() const
+{
+    std::vector<DescriptorSetInfo> out;
+    if (!valid())
+        return out;
+
+    auto tls = m_rv->typeLayouts();
+    if (m_typeLayoutIdx >= tls.size())
+        return out;
+
+    // Wrappers (CB / PB / TextureBuffer / SSB) carry their descriptor-set
+    // inventory either on themselves or on their element type layout,
+    // depending on the Slang version and the concrete shape of T. Probe the
+    // wrapper first, fall back to the element layout if empty so the caller
+    // doesn't have to care which side hosts the table.
+    uint32_t               queryIdx = m_typeLayoutIdx;
+    const fmt::TypeLayout* ql       = &tls[queryIdx];
+    using TK                        = slang::TypeReflection::Kind;
+    bool isContainer =
+        (static_cast<TK>(ql->kind) == TK::ConstantBuffer) || (static_cast<TK>(ql->kind) == TK::ParameterBlock) ||
+        (static_cast<TK>(ql->kind) == TK::TextureBuffer) || (static_cast<TK>(ql->kind) == TK::ShaderStorageBuffer);
+    if (ql->descriptorSetCount == 0 && isContainer && ql->elementTypeLayoutIdx < tls.size())
+    {
+        queryIdx = ql->elementTypeLayoutIdx;
+        ql       = &tls[queryIdx];
+    }
+    if (ql->descriptorSetCount == 0)
+        return out;
+
+    auto     sets      = m_rv->descriptorSets();
+    auto     ranges    = m_rv->descriptorRanges();
+    uint32_t baseSpace = descriptorSet();
+
+    for (uint32_t i = 0; i < ql->descriptorSetCount; ++i)
+    {
+        if (ql->descriptorSetOff + i >= sets.size())
+            break;
+        const auto&       s = sets[ql->descriptorSetOff + i];
+        DescriptorSetInfo info{};
+        info.space = baseSpace + s.spaceOffset;
+        for (uint32_t j = 0; j < s.descriptorRangeCount; ++j)
+        {
+            if (s.descriptorRangeStart + j >= ranges.size())
+                break;
+            const auto&           r = ranges[s.descriptorRangeStart + j];
+            DescriptorBindingInfo b{};
+            b.slot        = r.indexOffset;
+            b.count       = r.descriptorCount;
+            b.bindingType = r.bindingType;
+            b.category    = r.parameterCategory;
+            info.bindings.push_back(b);
+        }
+        out.push_back(std::move(info));
+    }
+    return out;
+}
+
 } // namespace slangmake

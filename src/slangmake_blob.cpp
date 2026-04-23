@@ -84,9 +84,7 @@ BlobWriter::BlobWriter(Target target)
 {
 }
 
-void BlobWriter::addEntry(const Permutation&        perm,
-                          std::span<const uint8_t>  code,
-                          std::span<const uint8_t>  reflection,
+void BlobWriter::addEntry(const Permutation& perm, std::span<const uint8_t> code, std::span<const uint8_t> reflection,
                           std::span<const uint32_t> depIndices)
 {
     Entry e;
@@ -322,9 +320,9 @@ void BlobReader::rebind(std::span<const uint8_t> blob)
             m_blob = {};
             return;
         }
-        auto                     codec = static_cast<Codec>(hdr->compression);
-        std::span payload(m_blob.data() + headerSize, m_blob.size() - headerSize);
-        std::vector<uint8_t>     decompressed;
+        auto                 codec = static_cast<Codec>(hdr->compression);
+        std::span            payload(m_blob.data() + headerSize, m_blob.size() - headerSize);
+        std::vector<uint8_t> decompressed;
         try
         {
             decompressed = detail::decompressPayload(codec, payload, hdr->uncompressedPayloadSize);
@@ -400,8 +398,7 @@ BlobReader::Entry BlobReader::at(size_t index) const
         const size_t byteOff = m_hdr->entryDepsIdxOffset + r.depsIdxOff * sizeof(uint32_t);
         const size_t byteEnd = byteOff + r.depsIdxCount * sizeof(uint32_t);
         if (byteEnd <= m_blob.size())
-            e.depIndices =
-                std::span<const uint32_t>(reinterpret_cast<const uint32_t*>(blob + byteOff), r.depsIdxCount);
+            e.depIndices = std::span<const uint32_t>(reinterpret_cast<const uint32_t*>(blob + byteOff), r.depsIdxCount);
     }
     return e;
 }
@@ -410,7 +407,12 @@ std::optional<BlobReader::Entry> BlobReader::find(std::span<const ShaderConstant
 {
     Permutation p;
     p.constants.assign(constants.begin(), constants.end());
-    auto key = p.key();
+    return find(p);
+}
+
+std::optional<BlobReader::Entry> BlobReader::find(const Permutation& perm) const
+{
+    auto key = perm.key();
     for (size_t i = 0; i < entryCount(); ++i)
     {
         auto e = at(i);

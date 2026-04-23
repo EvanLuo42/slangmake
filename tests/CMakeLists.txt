@@ -10,7 +10,9 @@ add_executable(slangmake_tests
         test_parallel.cpp
         test_incremental.cpp
         test_compression.cpp
-        test_spirv_match.cpp)
+        test_spirv_match.cpp
+        test_type_specialization.cpp
+        test_cursor.cpp)
 
 target_link_libraries(slangmake_tests PRIVATE slangmake-lib)
 

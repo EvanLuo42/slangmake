@@ -11,7 +11,8 @@
 using namespace slangmake;
 namespace fs = std::filesystem;
 
-namespace {
+namespace
+{
 
 fs::path scratch(const char* tag)
 {
@@ -25,9 +26,9 @@ fs::path scratch(const char* tag)
 // plus all extracted SPIRV bytes, keyed by permutation.
 struct CompiledSet
 {
-    size_t                                        fileSize = 0;
-    std::map<std::string, std::vector<uint8_t>>   codeByKey;
-    std::map<std::string, std::vector<uint8_t>>   reflByKey;
+    size_t                                      fileSize = 0;
+    std::map<std::string, std::vector<uint8_t>> codeByKey;
+    std::map<std::string, std::vector<uint8_t>> reflByKey;
 };
 
 CompiledSet compileWith(Codec codec, const fs::path& dir, const char* fileName)
@@ -53,12 +54,11 @@ CompiledSet compileWith(Codec codec, const fs::path& dir, const char* fileName)
     auto reader = BlobReader::openFile(outPath);
     REQUIRE(reader.has_value());
     REQUIRE(reader->valid());
-    for (size_t i = 0; i < reader->entryCount(); ++i) {
-        auto e = reader->at(i);
-        s.codeByKey[std::string(e.key)] =
-            std::vector<uint8_t>(e.code.begin(), e.code.end());
-        s.reflByKey[std::string(e.key)] =
-            std::vector<uint8_t>(e.reflection.begin(), e.reflection.end());
+    for (size_t i = 0; i < reader->entryCount(); ++i)
+    {
+        auto e                          = reader->at(i);
+        s.codeByKey[std::string(e.key)] = std::vector<uint8_t>(e.code.begin(), e.code.end());
+        s.reflByKey[std::string(e.key)] = std::vector<uint8_t>(e.reflection.begin(), e.reflection.end());
     }
     return s;
 }
@@ -68,13 +68,13 @@ CompiledSet compileWith(Codec codec, const fs::path& dir, const char* fileName)
 TEST_CASE("codecToString / parseCodec round-trip")
 {
     CHECK(std::string(codecToString(Codec::None)) == "none");
-    CHECK(std::string(codecToString(Codec::LZ4))  == "lz4");
+    CHECK(std::string(codecToString(Codec::LZ4)) == "lz4");
     CHECK(std::string(codecToString(Codec::Zstd)) == "zstd");
 
     CHECK(parseCodec("none").value() == Codec::None);
-    CHECK(parseCodec("LZ4").value()  == Codec::LZ4);
+    CHECK(parseCodec("LZ4").value() == Codec::LZ4);
     CHECK(parseCodec("zstd").value() == Codec::Zstd);
-    CHECK(parseCodec("zst").value()  == Codec::Zstd);
+    CHECK(parseCodec("zst").value() == Codec::Zstd);
     CHECK_FALSE(parseCodec("bogus").has_value());
 
     // Empty input maps to Codec::None (documented behaviour).
@@ -85,7 +85,7 @@ TEST_CASE("LZ4 compression shrinks the blob and decodes identically")
 {
     auto dir  = scratch("lz4");
     auto uncx = compileWith(Codec::None, dir, "none.bin");
-    auto cx   = compileWith(Codec::LZ4,  dir, "lz4.bin");
+    auto cx   = compileWith(Codec::LZ4, dir, "lz4.bin");
 
     CHECK(cx.fileSize < uncx.fileSize);
     CHECK(cx.codeByKey == uncx.codeByKey);
@@ -132,8 +132,8 @@ TEST_CASE("Mixing codecs across rebuilds still produces correct bytes")
     REQUIRE(zstdReader.has_value());
     REQUIRE(zstdReader->entryCount() == 1);
 
-    auto a = lz4Reader->at(0);
-    auto b = zstdReader->at(0);
+    auto                 a = lz4Reader->at(0);
+    auto                 b = zstdReader->at(0);
     std::vector<uint8_t> ca(a.code.begin(), a.code.end());
     std::vector<uint8_t> cb(b.code.begin(), b.code.end());
     CHECK(ca == cb);

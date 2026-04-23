@@ -13,6 +13,27 @@
 namespace slangmake
 {
 
+namespace
+{
+
+std::vector<std::string> findDuplicateAxisNames(std::span<const PermutationDefine> defs)
+{
+    std::unordered_map<std::string, uint32_t> counts;
+    counts.reserve(defs.size());
+    for (const auto& def : defs)
+        ++counts[def.name];
+
+    std::vector<std::string> duplicates;
+    duplicates.reserve(counts.size());
+    for (const auto& [name, count] : counts)
+        if (count > 1)
+            duplicates.push_back(name);
+    std::ranges::sort(duplicates);
+    return duplicates;
+}
+
+} // namespace
+
 BatchCompiler::BatchCompiler(Compiler& compiler)
     : m_compiler(compiler)
 {
@@ -26,7 +47,20 @@ BatchCompiler::Output BatchCompiler::compileFile(const Input& in, const std::fil
 
     auto fileDefs = PermutationParser::parseFile(in.file);
     auto merged   = mergePermutationDefines(fileDefs, in.cliOverride);
-    auto perms    = PermutationExpander::expand(merged);
+    if (auto duplicateAxes = findDuplicateAxisNames(merged); !duplicateAxes.empty())
+    {
+        std::string msg = "duplicate permutation axis name(s): ";
+        for (size_t i = 0; i < duplicateAxes.size(); ++i)
+        {
+            if (i)
+                msg += ", ";
+            msg += "'" + duplicateAxes[i] + "'";
+        }
+        msg += ". Each permutation axis name must be unique after CLI overrides are merged.";
+        out.failures.push_back(std::move(msg));
+        return out;
+    }
+    auto perms = PermutationExpander::expand(merged);
 
     CompileOptions opts = in.options;
     opts.inputFile      = in.file;
@@ -118,8 +152,8 @@ BatchCompiler::Output BatchCompiler::compileFile(const Input& in, const std::fil
             auto it = reuseKeyToIdx.find(perms[i].key());
             if (it != reuseKeyToIdx.end())
             {
-                auto e       = prevReader->at(it->second);
-                bool depsOk  = true;
+                auto e      = prevReader->at(it->second);
+                bool depsOk = true;
                 for (uint32_t depIdx : e.depIndices)
                 {
                     if (depIdx >= prevDepContentHashes.size() ||

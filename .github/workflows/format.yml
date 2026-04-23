@@ -1,0 +1,43 @@
+name: Format
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-format:
+    name: Check clang-format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+          clang-format-18 --version
+
+      - name: Check formatting
+        run: |
+          # Every C++ source under the repo's tracked tree. git ls-files skips
+          # build/ and install/ automatically because they are gitignored.
+          files=$(git ls-files '*.cpp' '*.h' '*.hpp' '*.hxx' '*.cxx' '*.cc')
+          if [ -z "$files" ]; then
+            echo "::error::no C++ sources matched — adjust the glob"
+            exit 1
+          fi
+          echo "checking $(echo "$files" | wc -l) files:"
+          echo "$files"
+          # --dry-run --Werror makes clang-format exit non-zero when any file
+          # would be modified, and prints a unified-diff-style report of what
+          # would change so contributors can fix it with a single re-run of
+          # `clang-format -i`.
+          clang-format-18 --dry-run --Werror $files

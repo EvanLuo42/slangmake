@@ -65,7 +65,7 @@ TEST_CASE("External .hlsli (outside source dir) requires -I to resolve")
 
     // Adding the search path makes it resolve.
     opts.includePaths = {fs::path(SLANG_MAKE_TESTS_SHADER_DIR) / "external"};
-    auto rOk = c.compile(opts, Permutation{});
+    auto rOk          = c.compile(opts, Permutation{});
     INFO("diag: " << rOk.diagnostics);
     REQUIRE(rOk.success);
     REQUIRE(rOk.code.size() >= 4);
@@ -137,14 +137,14 @@ TEST_CASE("BatchCompiler compiles an #include-ing shader with permutations")
     fs::remove_all(outDir);
     fs::create_directories(outDir);
 
-    Compiler       c;
-    BatchCompiler  bc(c);
+    Compiler      c;
+    BatchCompiler bc(c);
     bc.setQuiet(true);
 
     BatchCompiler::Input in;
-    in.file            = fs::path(SLANG_MAKE_TESTS_SHADER_DIR) / "with_include.slang";
-    in.options.target  = Target::SPIRV;
-    in.options.profile = "sm_6_5";
+    in.file                 = fs::path(SLANG_MAKE_TESTS_SHADER_DIR) / "with_include.slang";
+    in.options.target       = Target::SPIRV;
+    in.options.profile      = "sm_6_5";
     in.options.includePaths = {fs::path(SLANG_MAKE_TESTS_SHADER_DIR)};
 
     auto outPath = outDir / "with_include.bin";
@@ -159,8 +159,8 @@ TEST_CASE("BatchCompiler compiles an #include-ing shader with permutations")
 
     // The two permutations hit different branches in the .hlsli, so the
     // bytecode for each must differ.
-    auto e0 = reader->at(0);
-    auto e1 = reader->at(1);
+    auto                 e0 = reader->at(0);
+    auto                 e1 = reader->at(1);
     std::vector<uint8_t> c0(e0.code.begin(), e0.code.end());
     std::vector<uint8_t> c1(e1.code.begin(), e1.code.end());
     CHECK(c0 != c1);
@@ -184,7 +184,8 @@ TEST_CASE("Compiler::Result::dependencies lists the source and its #include-d fi
 
     // The dep list must include both the top-level source and the .hlsli it
     // #includes. Slang reports absolute paths; compare by filename.
-    auto hasFilename = [&](std::string_view name) {
+    auto hasFilename = [&](std::string_view name)
+    {
         for (const auto& p : r.dependencies)
             if (fs::path(p).filename() == name)
                 return true;

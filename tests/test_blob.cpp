@@ -97,9 +97,9 @@ TEST_CASE("BlobReader::find returns nullopt when no entry matches")
 TEST_CASE("BlobWriter deduplicates identical reflection payloads")
 {
     BlobWriter w(Target::SPIRV);
-    auto       code1 = bytes({0x11});
-    auto       code2 = bytes({0x22});
-    auto       code3 = bytes({0x33});
+    auto       code1      = bytes({0x11});
+    auto       code2      = bytes({0x22});
+    auto       code3      = bytes({0x33});
     auto       sharedRefl = bytes({'R', 'E', 'F', 'L', 0, 1, 2, 3});
     auto       uniqueRefl = bytes({'X', 'Y', 'Z'});
 
@@ -218,10 +218,8 @@ TEST_CASE("BlobWriter::addEntry preserves depIndices through BlobReader")
 
     std::array<uint32_t, 2> idxA{0u, 2u};
     std::array<uint32_t, 1> idxB{1u};
-    w.addEntry(perm({{"K", "a"}}), bytes({1}), bytes({}),
-               std::span<const uint32_t>(idxA.data(), idxA.size()));
-    w.addEntry(perm({{"K", "b"}}), bytes({2}), bytes({}),
-               std::span<const uint32_t>(idxB.data(), idxB.size()));
+    w.addEntry(perm({{"K", "a"}}), bytes({1}), bytes({}), std::span<const uint32_t>(idxA.data(), idxA.size()));
+    w.addEntry(perm({{"K", "b"}}), bytes({2}), bytes({}), std::span<const uint32_t>(idxB.data(), idxB.size()));
 
     auto       blob = w.finalize();
     BlobReader r(blob);

@@ -75,6 +75,35 @@ TEST_CASE("BatchCompiler::compileFile applies CLI override on top of file direct
     fs::remove_all(outDir);
 }
 
+TEST_CASE("BatchCompiler::compileFile rejects duplicate permutation axis names after merge")
+{
+    Compiler      c;
+    BatchCompiler bc(c);
+    bc.setKeepGoing(true);
+    bc.setQuiet(true);
+
+    BatchCompiler::Input in;
+    in.file            = fs::path(SLANG_MAKE_TESTS_SHADER_DIR) / "generic_material.slang";
+    in.options.target  = Target::SPIRV;
+    in.options.profile = "sm_6_5";
+    in.cliOverride     = {
+        {"MAT", {"Metal"}, PermutationDefine::Kind::Type},
+        {"MAT", {"Wood"}, PermutationDefine::Kind::Type},
+    };
+
+    auto outDir  = makeTempDir("batch_dup_axis");
+    auto outPath = outDir / "generic_material.bin";
+    auto out     = bc.compileFile(in, outPath);
+
+    REQUIRE(out.compiled.empty());
+    REQUIRE(out.failures.size() == 1);
+    CHECK(out.failures[0].find("duplicate permutation axis name") != std::string::npos);
+    CHECK(out.failures[0].find("'MAT'") != std::string::npos);
+    CHECK_FALSE(fs::exists(outPath));
+
+    fs::remove_all(outDir);
+}
+
 TEST_CASE("BatchCompiler::compileDirectory walks *.slang and writes parallel .bin tree")
 {
     auto srcDir = makeTempDir("batch_src");
@@ -239,8 +268,8 @@ TEST_CASE("compileDirectory applies cliOverride uniformly to every discovered fi
     base.target  = Target::SPIRV;
     base.profile = "sm_6_5";
 
-    std::vector<PermutationDefine> cli = {{"USE_SHADOW", {"0", "1", "2"}}};
-    auto outputs = bc.compileDirectory(srcDir, base, outDir, cli);
+    std::vector<PermutationDefine> cli     = {{"USE_SHADOW", {"0", "1", "2"}}};
+    auto                           outputs = bc.compileDirectory(srcDir, base, outDir, cli);
 
     REQUIRE(outputs.size() == 2);
     for (const auto& o : outputs)

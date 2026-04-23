@@ -103,8 +103,14 @@ struct ShaderConstant
 
 struct PermutationDefine
 {
+    enum class Kind : uint32_t
+    {
+        Constant, // preprocessor #define (value is a literal/expression)
+        Type      // generic type parameter (value is a Slang type expression)
+    };
     std::string              name;
     std::vector<std::string> values;
+    Kind                     kind = Kind::Constant;
 };
 
 struct VulkanBindShift
@@ -139,12 +145,19 @@ struct CompileOptions
 struct Permutation
 {
     std::vector<ShaderConstant> constants;
+    // Bindings for module-scope `type_param T : IFoo;` parameters. Name matches
+    // the type parameter's identifier; value is a Slang type expression passed
+    // to IComponentType::specialize as an Expr SpecializationArg.
+    std::vector<ShaderConstant> typeArgs;
 
     /**
      * Canonical permutation key. Names are sorted alphabetically so two
-     * ShaderConstant sets with the same values always produce the same key.
+     * permutations with the same axes always produce the same key. When
+     * typeArgs is non-empty it is appended after a '|' separator so the key is
+     * backward-compatible with permutations that only use constants.
      *
-     * @return the joined key, e.g. "A=0_B=1"; empty string when constants is empty
+     * @return the joined key, e.g. "A=0_B=1" or "A=0|T=Metal"; empty string
+     *         when both vectors are empty
      */
     [[nodiscard]] std::string key() const;
 };
@@ -219,7 +232,6 @@ bool sourceHasNoReflection(std::string_view source);
  */
 bool fileHasNoReflection(const std::filesystem::path& path);
 
-
 namespace fmt
 {
 
@@ -241,7 +253,7 @@ struct BlobHeader
     uint32_t depsCount;
     uint32_t depsStringsOffset;
     uint32_t depsStringsSize;
-    uint32_t entryDepsIdxOffset;      // u32[] shared pool of per-entry dep indices
+    uint32_t entryDepsIdxOffset; // u32[] shared pool of per-entry dep indices
     uint32_t entryDepsIdxCount;
     uint32_t compression;
     uint32_t uncompressedPayloadSize;
@@ -566,9 +578,7 @@ public:
      *                    files this permutation actually read. Empty means
      *                    "unknown / don't participate in per-entry reuse".
      */
-    void addEntry(const Permutation&        perm,
-                  std::span<const uint8_t>  code,
-                  std::span<const uint8_t>  reflection,
+    void addEntry(const Permutation& perm, std::span<const uint8_t> code, std::span<const uint8_t> reflection,
                   std::span<const uint32_t> depIndices = {});
 
     struct DepInfo
@@ -669,6 +679,16 @@ public:
     std::optional<Entry> find(std::span<const ShaderConstant> constants) const;
 
     /**
+     * Find the entry whose key matches `perm.key()` verbatim. Use this overload
+     * when the permutation carries type-argument axes (`perm.typeArgs`) in
+     * addition to preprocessor constants.
+     *
+     * @param perm full permutation, constants and type arguments combined
+     * @return     matching entry or std::nullopt
+     */
+    std::optional<Entry> find(const Permutation& perm) const;
+
+    /**
      * List every entry key in insertion order.
      *
      * @return the key of every entry in the blob
@@ -764,13 +784,13 @@ public:
 
     struct EntryPointInfo
     {
-        std::string_view                                                    name;
-        std::string_view                                                    nameOverride;
-        uint32_t                                                            stage;           // from [shader("...")]
-        std::array<uint32_t, 3>                                             threadGroupSize; // from [numthreads(...)]
-        uint32_t                                                            waveSize;
-        uint64_t                                                            hash;
-        std::vector<Param>                                                  parameters;
+        std::string_view        name;
+        std::string_view        nameOverride;
+        uint32_t                stage;           // from [shader("...")]
+        std::array<uint32_t, 3> threadGroupSize; // from [numthreads(...)]
+        uint32_t                waveSize;
+        uint64_t                hash;
+        std::vector<Param>      parameters;
         /**
          * User-defined attributes only. Slang reports built-in ones like
          * `[shader("...")]` and `[numthreads(...)]` via dedicated reflection
@@ -805,6 +825,227 @@ public:
 
     std::optional<DeclNode> rootDecl() const;
     DeclNode                decl(uint32_t idx) const;
+
+    /**
+     * Slang-ShaderCursor-style navigator over the serialized reflection tree.
+     *
+     * A Cursor is a value type pointing at a logical position inside a shader
+     * program's parameter block. Its primary operations are named/indexed
+     * traversal (`operator[]`) and query of the accumulated binding state at
+     * the current leaf (uniform byte offset, descriptor set/slot, per-category
+     * offsets).
+     *
+     * Container types — `ConstantBuffer<T>`, `ParameterBlock<T>`,
+     * `TextureBuffer<T>`, `ShaderStorageBuffer` — are auto-dereferenced on
+     * navigation so `root["cb"]["field"]` works the same as
+     * `root["cb"].dereference()["field"]`. Call `dereference()` explicitly only
+     * when you need the container layer itself (e.g. to bind the implicit
+     * constant buffer resource of a ParameterBlock).
+     *
+     * Offsets / spaces are tracked per SlangParameterCategory. A navigation
+     * step accumulates every category present on the visited VariableLayout,
+     * so a final Cursor's `offsetFor(Uniform)` is the full byte offset into
+     * its owning constant buffer, `spaceFor(DescriptorTableSlot)` is the
+     * final Vulkan set index, and so on — no caller-side arithmetic needed.
+     *
+     * The Cursor is non-owning and cheap to copy (~ 256 bytes).
+     */
+    class Cursor
+    {
+    public:
+        Cursor() = default;
+
+        bool valid() const { return m_rv != nullptr && m_typeLayoutIdx != fmt::kInvalidIndex; }
+
+        /**
+         * Navigate into a struct field by name. If the current type is a
+         * container (CB/PB/TextureBuffer/SSB), it is auto-dereferenced first.
+         *
+         * @param name field identifier
+         * @return     cursor at the field, or an invalid cursor if the name
+         *             doesn't resolve or the current type is not a struct
+         */
+        Cursor field(std::string_view name) const;
+
+        /**
+         * Navigate into an array element by index. Strides come from the
+         * element type's per-category size pool, so this works for arrays of
+         * uniforms, descriptor-bound resources, and anything else Slang lays
+         * out in a strided fashion.
+         *
+         * @param index element index (not bounds-checked against the array
+         *              length — caller is responsible for staying in range)
+         * @return      cursor at the element, or invalid if not an array
+         */
+        Cursor element(uint32_t index) const;
+
+        Cursor operator[](std::string_view name) const { return field(name); }
+        Cursor operator[](const char* name) const { return field(name); }
+        Cursor operator[](uint32_t index) const { return element(index); }
+
+        /**
+         * Explicitly step into a container type's element layout. Rarely
+         * needed because `field()` / `element()` auto-dereference; useful when
+         * you want to bind the container layer itself (e.g. the implicit CB
+         * behind a ParameterBlock).
+         */
+        Cursor dereference() const;
+
+        /**
+         * Inverse of `dereference()`: step onto the container layer of a
+         * ConstantBuffer<T> / ParameterBlock<T> / TextureBuffer<T> /
+         * ShaderStorageBuffer. The returned cursor represents the *container
+         * resource itself* (the implicit constant buffer of a PB, or the CB
+         * of a ConstantBuffer<T>), so `resourceBinding()` on it gives the
+         * (space, slot) where the engine must write the VkBuffer /
+         * ID3D12Resource handle.
+         *
+         * Returns an invalid cursor when the current type is not a container.
+         */
+        Cursor container() const;
+
+        /**
+         * Cursor for the explicit counter of an `AppendStructuredBuffer` /
+         * `ConsumeStructuredBuffer`. Invalid on anything else.
+         */
+        Cursor explicitCounter() const;
+
+        /**
+         * Name of the VariableLayout that produced this cursor (i.e. the name
+         * used in the last `field()` step). Empty when the cursor is at the
+         * root or at an array element.
+         */
+        std::string_view name() const;
+
+        uint32_t typeLayoutIndex() const { return m_typeLayoutIdx; }
+        uint32_t typeKind() const; // slang::TypeReflection::Kind value
+
+        /**
+         * Accumulated offset along a single SlangParameterCategory axis.
+         *
+         * @param category SLANG_PARAMETER_CATEGORY_* value
+         * @return         accumulated offset (byte count for Uniform / push
+         *                 constants, slot index for DescriptorTableSlot /
+         *                 D3D-style register categories)
+         */
+        uint32_t offsetFor(uint32_t category) const;
+
+        /**
+         * Accumulated space along a single SlangParameterCategory axis.
+         * For most categories this is the descriptor-set / register-space
+         * index relative to the program root.
+         */
+        uint32_t spaceFor(uint32_t category) const;
+
+        /**
+         * Size at the current cursor's type along a category axis, read from
+         * the serialized TypeLayout sizePool. Returns 0 when the category
+         * doesn't participate in the current type's layout.
+         */
+        uint32_t sizeFor(uint32_t category) const;
+        uint32_t strideFor(uint32_t category) const;
+
+        // Convenience shortcuts for the three categories nearly every engine
+        // bind path cares about. Equivalent to offsetFor/spaceFor with the
+        // corresponding SlangParameterCategory constants.
+        uint32_t uniformOffset() const;
+        uint32_t descriptorSlot() const;
+        uint32_t descriptorSet() const;
+
+        struct UniformLocation
+        {
+            uint32_t offsetBytes;
+            uint32_t sizeBytes;
+        };
+        /**
+         * Byte range `[offsetBytes, offsetBytes + sizeBytes)` into the
+         * enclosing constant buffer that this cursor covers. Valid only when
+         * the cursor sits in a uniform-bearing part of the layout; otherwise
+         * sizeBytes is 0.
+         */
+        UniformLocation uniformLocation() const;
+
+        struct ResourceBinding
+        {
+            uint32_t space;
+            uint32_t index;
+            uint32_t category; // SlangParameterCategory that supplied the binding
+        };
+        /**
+         * First non-uniform binding seen on this cursor: (space, index,
+         * category). Returns std::nullopt when the cursor is at a uniform-only
+         * leaf (e.g. a scalar inside a CB) or at an invalid position.
+         */
+        std::optional<ResourceBinding> resourceBinding() const;
+
+        // One descriptor range inside an enumerated descriptor set. Matches
+        // Slang's own (DescriptorSet, DescriptorRange) split: a single set
+        // may contain several ranges of different binding types.
+        struct DescriptorBindingInfo
+        {
+            uint32_t slot;        // binding index within the set
+            uint32_t count;       // descriptor count (array size; large for bindless)
+            uint32_t bindingType; // SlangBindingType (SLANG_BINDING_TYPE_*)
+            uint32_t category;    // SlangParameterCategory
+        };
+
+        struct DescriptorSetInfo
+        {
+            uint32_t                           space; // absolute descriptor-set / register-space index
+            std::vector<DescriptorBindingInfo> bindings;
+        };
+
+        /**
+         * Enumerate every descriptor set that belongs to the sub-tree rooted
+         * at this cursor. For a cursor on a ParameterBlock, these are the
+         * sets the PB needs — enough to build `VkDescriptorSetLayout` objects
+         * or a D3D12 root signature slice. For the root cursor on a global
+         * struct, these are the program-wide global sets.
+         *
+         * The returned `space` is absolute (cursor's accumulated space plus
+         * the set's internal offset), ready to hand to vkCmdBindDescriptorSets.
+         */
+        std::vector<DescriptorSetInfo> descriptorSetLayout() const;
+
+    private:
+        friend class ReflectionView;
+
+        // 32 slots cover every SlangParameterCategory value currently defined
+        // (the enum runs through the low 20s). Trivially copyable.
+        static constexpr size_t kMaxCategory = 32;
+
+        const ReflectionView*              m_rv            = nullptr;
+        uint32_t                           m_typeLayoutIdx = fmt::kInvalidIndex;
+        uint32_t                           m_varLayoutIdx  = fmt::kInvalidIndex;
+        std::array<uint32_t, kMaxCategory> m_offsets{};
+        std::array<uint32_t, kMaxCategory> m_spaces{};
+
+        void applyVarLayout(uint32_t vlIdx);
+        void autoDereference();
+    };
+
+    /**
+     * Cursor pointing at the program's global parameter block. From here,
+     * `operator[]` walks into any global resource or uniform field by name.
+     *
+     * @return an invalid cursor if the blob carries no global-params layout.
+     */
+    Cursor rootCursor() const;
+
+    /**
+     * Cursor pointing at the parameter block of entry point `entryPointIndex`.
+     * Entry-point uniforms are usually laid out in the entry-point's implicit
+     * constant buffer; use this cursor to address them.
+     *
+     * @param entryPointIndex index into entryPoints()
+     * @return                invalid cursor when the index is out of range
+     */
+    Cursor entryPointCursor(uint32_t entryPointIndex) const;
+
+    /**
+     * Convenience wrapper for `rootCursor()[name]`.
+     */
+    Cursor findGlobalParam(std::string_view name) const;
 
 private:
     std::span<const uint8_t> m_bytes;

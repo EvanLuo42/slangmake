@@ -115,16 +115,28 @@ SlangCompileTarget toSlangCompileTarget(Target t)
 
 std::string Permutation::key() const
 {
-    std::vector<ShaderConstant> sorted = constants;
-    std::ranges::sort(sorted, [](const ShaderConstant& a, const ShaderConstant& b) { return a.name < b.name; });
-    std::string out;
-    for (size_t i = 0; i < sorted.size(); ++i)
+    auto joinSorted = [](std::vector<ShaderConstant> v) -> std::string
     {
-        if (i)
-            out.push_back('_');
-        out += sorted[i].name;
-        out.push_back('=');
-        out += sorted[i].value;
+        std::ranges::sort(v, [](const ShaderConstant& a, const ShaderConstant& b) { return a.name < b.name; });
+        std::string s;
+        for (size_t i = 0; i < v.size(); ++i)
+        {
+            if (i)
+                s.push_back('_');
+            s += v[i].name;
+            s.push_back('=');
+            s += v[i].value;
+        }
+        return s;
+    };
+
+    std::string out = joinSorted(constants);
+    if (!typeArgs.empty())
+    {
+        // Leading '|' when there are no constants distinguishes an all-type-args
+        // key from an all-constants key that happens to use the same names.
+        out.push_back('|');
+        out += joinSorted(typeArgs);
     }
     return out;
 }
@@ -145,7 +157,179 @@ std::string trim(std::string_view s)
     return std::string(s.substr(a, b - a));
 }
 
+std::optional<size_t> findDirectiveValueListEnd(std::string_view s, size_t start, bool allowAngleNesting)
+{
+    int  angleDepth   = 0;
+    int  parenDepth   = 0;
+    int  bracketDepth = 0;
+    int  braceDepth   = 0;
+    char quote        = '\0';
+    bool escape       = false;
+
+    for (size_t i = start; i < s.size(); ++i)
+    {
+        const char ch = s[i];
+        if (quote)
+        {
+            if (escape)
+            {
+                escape = false;
+                continue;
+            }
+            if (ch == '\\')
+            {
+                escape = true;
+                continue;
+            }
+            if (ch == quote)
+                quote = '\0';
+            continue;
+        }
+
+        switch (ch)
+        {
+        case '"':
+        case '\'':
+            quote = ch;
+            break;
+        case '<':
+            if (allowAngleNesting)
+                ++angleDepth;
+            break;
+        case '>':
+            if (allowAngleNesting && angleDepth > 0)
+                --angleDepth;
+            break;
+        case '(':
+            ++parenDepth;
+            break;
+        case ')':
+            if (parenDepth == 0)
+                return std::nullopt;
+            --parenDepth;
+            break;
+        case '[':
+            ++bracketDepth;
+            break;
+        case ']':
+            if (bracketDepth == 0)
+                return std::nullopt;
+            --bracketDepth;
+            break;
+        case '{':
+            ++braceDepth;
+            break;
+        case '}':
+            if (braceDepth == 0)
+                return (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0) ? std::optional<size_t>(i)
+                                                                                 : std::nullopt;
+            --braceDepth;
+            break;
+        default:
+            break;
+        }
+    }
+
+    return std::nullopt;
+}
+
 } // namespace
+
+std::optional<std::vector<std::string>> detail::parsePermutationValueList(std::string_view inside,
+                                                                          bool             allowAngleNesting)
+{
+    std::vector<std::string> values;
+    size_t                   tokenStart   = 0;
+    int                      angleDepth   = 0;
+    int                      parenDepth   = 0;
+    int                      bracketDepth = 0;
+    int                      braceDepth   = 0;
+    char                     quote        = '\0';
+    bool                     escape       = false;
+
+    auto flushToken = [&](size_t tokenEnd)
+    {
+        std::string t = trim(inside.substr(tokenStart, tokenEnd - tokenStart));
+        if (!t.empty())
+            values.push_back(std::move(t));
+    };
+
+    for (size_t i = 0; i < inside.size(); ++i)
+    {
+        const char ch = inside[i];
+        if (quote)
+        {
+            if (escape)
+            {
+                escape = false;
+                continue;
+            }
+            if (ch == '\\')
+            {
+                escape = true;
+                continue;
+            }
+            if (ch == quote)
+                quote = '\0';
+            continue;
+        }
+
+        switch (ch)
+        {
+        case '"':
+        case '\'':
+            quote = ch;
+            break;
+        case '<':
+            if (allowAngleNesting)
+                ++angleDepth;
+            break;
+        case '>':
+            if (allowAngleNesting && angleDepth > 0)
+                --angleDepth;
+            break;
+        case '(':
+            ++parenDepth;
+            break;
+        case ')':
+            if (parenDepth == 0)
+                return std::nullopt;
+            --parenDepth;
+            break;
+        case '[':
+            ++bracketDepth;
+            break;
+        case ']':
+            if (bracketDepth == 0)
+                return std::nullopt;
+            --bracketDepth;
+            break;
+        case '{':
+            ++braceDepth;
+            break;
+        case '}':
+            if (braceDepth == 0)
+                return std::nullopt;
+            --braceDepth;
+            break;
+        case ',':
+            if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+            {
+                flushToken(i);
+                tokenStart = i + 1;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (quote || angleDepth != 0 || parenDepth != 0 || bracketDepth != 0 || braceDepth != 0)
+        return std::nullopt;
+
+    flushToken(inside.size());
+    return values;
+}
 
 std::vector<PermutationDefine> PermutationParser::parse(std::string_view source)
 {
@@ -192,12 +376,26 @@ std::vector<PermutationDefine> PermutationParser::parse(std::string_view source)
             continue;
         i += 2;
         skipWs(line, i);
-        constexpr std::string_view marker = "[permutation]";
-        if (line.size() - i < marker.size())
+
+        // Accept either "[permutation] NAME=..." (constant / macro axis) or
+        // "[permutation type] NAME=..." (generic type-parameter axis).
+        constexpr std::string_view markerC = "[permutation]";
+        constexpr std::string_view markerT = "[permutation type]";
+
+        PermutationDefine::Kind kind = PermutationDefine::Kind::Constant;
+        if (line.size() - i >= markerT.size() && line.substr(i, markerT.size()) == markerT)
+        {
+            kind = PermutationDefine::Kind::Type;
+            i += markerT.size();
+        }
+        else if (line.size() - i >= markerC.size() && line.substr(i, markerC.size()) == markerC)
+        {
+            i += markerC.size();
+        }
+        else
+        {
             continue;
-        if (line.substr(i, marker.size()) != marker)
-            continue;
-        i += marker.size();
+        }
         skipWs(line, i);
 
         if (i >= line.size() || !isIdentStart(line[i]))
@@ -216,30 +414,19 @@ std::vector<PermutationDefine> PermutationParser::parse(std::string_view source)
             continue;
         ++i;
 
-        size_t close = line.find('}', i);
-        if (close == std::string_view::npos)
+        const bool allowAngleNesting = (kind == PermutationDefine::Kind::Type);
+        auto       close             = findDirectiveValueListEnd(line, i, allowAngleNesting);
+        if (!close.has_value())
             continue;
 
-        std::string_view         inside = line.substr(i, close - i);
-        std::vector<std::string> values;
-        size_t                   s = 0;
-        while (s <= inside.size())
-        {
-            size_t           comma = inside.find(',', s);
-            std::string_view v     = (comma == std::string_view::npos) ? inside.substr(s) : inside.substr(s, comma - s);
-            std::string      t     = trim(v);
-            if (!t.empty())
-                values.push_back(std::move(t));
-            if (comma == std::string_view::npos)
-                break;
-            s = comma + 1;
-        }
-        if (values.empty())
+        auto values = detail::parsePermutationValueList(line.substr(i, *close - i), allowAngleNesting);
+        if (!values.has_value() || values->empty())
             continue;
 
         PermutationDefine def;
+        def.kind   = kind;
         def.name   = std::move(name);
-        def.values = std::move(values);
+        def.values = std::move(*values);
         out.push_back(std::move(def));
     }
     return out;
@@ -332,7 +519,10 @@ std::vector<Permutation> PermutationExpander::expand(const std::vector<Permutati
             for (const auto& v : d.values)
             {
                 Permutation p = base;
-                p.constants.push_back({d.name, v});
+                if (d.kind == PermutationDefine::Kind::Type)
+                    p.typeArgs.push_back({d.name, v});
+                else
+                    p.constants.push_back({d.name, v});
                 next.push_back(std::move(p));
             }
         }
@@ -340,8 +530,9 @@ std::vector<Permutation> PermutationExpander::expand(const std::vector<Permutati
     }
     for (auto& p : out)
     {
-        std::ranges::sort(p.constants,
-                          [](const ShaderConstant& a, const ShaderConstant& b) { return a.name < b.name; });
+        auto byName = [](const ShaderConstant& a, const ShaderConstant& b) { return a.name < b.name; };
+        std::ranges::sort(p.constants, byName);
+        std::ranges::sort(p.typeArgs, byName);
     }
     return out;
 }

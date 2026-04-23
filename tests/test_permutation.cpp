@@ -57,6 +57,26 @@ TEST_CASE("PermutationParser::parse rejects malformed directives")
     CHECK(defs[0].values == std::vector<std::string>{"x"});
 }
 
+TEST_CASE("PermutationParser::parse keeps nested commas inside type expressions")
+{
+    auto defs = PermutationParser::parse(R"(
+// [permutation type] MAT={Array<float4, 4>, Pair<Metal, Wood>}
+)");
+    REQUIRE(defs.size() == 1);
+    CHECK(defs[0].kind == PermutationDefine::Kind::Type);
+    CHECK(defs[0].values == std::vector<std::string>{"Array<float4, 4>", "Pair<Metal, Wood>"});
+}
+
+TEST_CASE("PermutationParser::parse keeps comparison operators in constant expressions")
+{
+    auto defs = PermutationParser::parse(R"(
+// [permutation] CMP={A < B, C > D}
+)");
+    REQUIRE(defs.size() == 1);
+    CHECK(defs[0].kind == PermutationDefine::Kind::Constant);
+    CHECK(defs[0].values == std::vector<std::string>{"A < B", "C > D"});
+}
+
 TEST_CASE("PermutationParser::parseFile reads file contents")
 {
     auto tmp = std::filesystem::temp_directory_path() / "slangmake_perm_test.slang";

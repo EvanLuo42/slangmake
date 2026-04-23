@@ -20,8 +20,7 @@ namespace
 // Compile the same shader straight against the Slang API the way slangmake does
 // internally — minus reflection serialisation. The bytecode produced here is the
 // reference our blob-extracted bytecode must match exactly.
-std::vector<uint8_t> compileViaRawSlang(const fs::path&                  shaderPath,
-                                        const char*                      profileName,
+std::vector<uint8_t> compileViaRawSlang(const fs::path& shaderPath, const char* profileName,
                                         const std::vector<ShaderConstant>& defines = {})
 {
     Slang::ComPtr<slang::IGlobalSession> globalSession;
@@ -209,7 +208,8 @@ TEST_CASE("Every permutation in the blob matches raw-slang output byte-for-byte"
 
     // For each permutation in the blob, re-compile the shader via the raw Slang
     // API with the same defines and assert byte-equal SPIRV.
-    for (const auto& perm : out.compiled) {
+    for (const auto& perm : out.compiled)
+    {
         auto entry = reader->find(std::span<const ShaderConstant>(perm.constants));
         REQUIRE_MESSAGE(entry.has_value(), "missing blob entry for " << perm.key());
 
@@ -217,10 +217,8 @@ TEST_CASE("Every permutation in the blob matches raw-slang output byte-for-byte"
         REQUIRE(reference.size() >= 4);
 
         std::vector<uint8_t> extracted(entry->code.begin(), entry->code.end());
-        CHECK_MESSAGE(extracted.size() == reference.size(),
-                      "size mismatch for " << perm.key());
-        CHECK_MESSAGE(extracted == reference,
-                      "byte mismatch for " << perm.key());
+        CHECK_MESSAGE(extracted.size() == reference.size(), "size mismatch for " << perm.key());
+        CHECK_MESSAGE(extracted == reference, "byte mismatch for " << perm.key());
 
         // Reflection section per permutation is well-formed too.
         CHECK_FALSE(entry->reflection.empty());

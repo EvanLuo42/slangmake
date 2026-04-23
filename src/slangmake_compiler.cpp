@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "slangmake_internal.h"
@@ -118,6 +120,22 @@ std::vector<slang::CompilerOptionEntry> buildOptionEntries(const CompileOptions&
     return entries;
 }
 
+std::vector<std::string> findDuplicateBindingNames(std::span<const ShaderConstant> values)
+{
+    std::unordered_map<std::string, uint32_t> counts;
+    counts.reserve(values.size());
+    for (const auto& value : values)
+        ++counts[value.name];
+
+    std::vector<std::string> duplicates;
+    duplicates.reserve(counts.size());
+    for (const auto& [name, count] : counts)
+        if (count > 1)
+            duplicates.push_back(name);
+    std::ranges::sort(duplicates);
+    return duplicates;
+}
+
 } // namespace
 
 Compiler::Result Compiler::compile(const CompileOptions& opts, const Permutation& perm) const
@@ -126,6 +144,19 @@ Compiler::Result Compiler::compile(const CompileOptions& opts, const Permutation
     if (!m_globalSession)
     {
         result.diagnostics = "no global session";
+        return result;
+    }
+
+    if (auto duplicateTypeArgs = findDuplicateBindingNames(perm.typeArgs); !duplicateTypeArgs.empty())
+    {
+        result.diagnostics = "duplicate typeArg name(s): ";
+        for (size_t i = 0; i < duplicateTypeArgs.size(); ++i)
+        {
+            if (i)
+                result.diagnostics += ", ";
+            result.diagnostics += "'" + duplicateTypeArgs[i] + "'";
+        }
+        result.diagnostics += ". Each module-scope `type_param` may be specialized at most once per permutation.";
         return result;
     }
 
@@ -258,6 +289,142 @@ Compiler::Result Compiler::compile(const CompileOptions& opts, const Permutation
             result.diagnostics.append(static_cast<const char*>(compDiag->getBufferPointer()),
                                       compDiag->getBufferSize());
         return result;
+    }
+
+    // If the permutation binds module-scope generic type parameters, resolve
+    // them by name against the unspecialized program layout, build a
+    // positional SpecializationArg array, and produce a specialized component
+    // that the linker/codegen can consume.
+    if (!perm.typeArgs.empty())
+    {
+        Slang::ComPtr<slang::IBlob> layoutDiag;
+        slang::ProgramLayout*       preLayout = composite->getLayout(0, layoutDiag.writeRef());
+        if (layoutDiag && layoutDiag->getBufferSize() > 0)
+            result.diagnostics.append(static_cast<const char*>(layoutDiag->getBufferPointer()),
+                                      layoutDiag->getBufferSize());
+        if (!preLayout)
+        {
+            result.diagnostics += "\nfailed to obtain unspecialized program layout";
+            return result;
+        }
+
+        const unsigned tpCount    = preLayout->getTypeParameterCount();
+        const SlangInt totalSpecs = composite->getSpecializationParamCount();
+
+        // slangmake only knows how to positionally bind module-scope `type_param`
+        // declarations. Interface-typed globals (e.g. `IFoo gFoo;`), entry-point
+        // generic parameters, and specialisation-gated existentials also show
+        // up in getSpecializationParamCount() but cannot be reached through
+        // ProgramLayout::getTypeParameterByIndex. Refuse the compile explicitly
+        // rather than silently building a short/misaligned argument array.
+        if (totalSpecs != static_cast<SlangInt>(tpCount))
+        {
+            result.diagnostics += "\nmodule has " + std::to_string(totalSpecs) +
+                                  " specialization parameters but only " + std::to_string(tpCount) +
+                                  " are declared as module-scope `type_param` — slangmake's typeArgs can only "
+                                  "bind type_param axes. Refactor the remaining specialisation into type_param "
+                                  "declarations or pre-bake them via permutation constants.";
+            return result;
+        }
+
+        std::unordered_map<std::string, std::string> argByName;
+        argByName.reserve(perm.typeArgs.size());
+        for (const auto& ta : perm.typeArgs)
+            argByName.emplace(ta.name, ta.value);
+
+        // Collect declared names first so we can report strays against a
+        // concrete list (and so the fast-path type lookup has a stable order).
+        std::vector<std::string> declaredNames;
+        declaredNames.reserve(tpCount);
+        for (unsigned i = 0; i < tpCount; ++i)
+        {
+            auto* tp = preLayout->getTypeParameterByIndex(i);
+            if (!tp)
+            {
+                result.diagnostics += "\ninternal: null type parameter at index " + std::to_string(i);
+                return result;
+            }
+            const char* n = tp->getName();
+            declaredNames.emplace_back(n ? n : "");
+        }
+
+        // Fail fast on stray typeArgs — almost always a typo. Do this before
+        // invoking the (expensive, less-legible) slang type checker.
+        {
+            std::vector<std::string> strays;
+            for (const auto& [n, _] : argByName)
+            {
+                if (std::find(declaredNames.begin(), declaredNames.end(), n) == declaredNames.end())
+                    strays.push_back(n);
+            }
+            if (!strays.empty())
+            {
+                std::ranges::sort(strays);
+                std::string msg = "\nunknown typeArg(s) with no matching module-scope `type_param`: ";
+                for (size_t i = 0; i < strays.size(); ++i)
+                {
+                    if (i)
+                        msg += ", ";
+                    msg += "'" + strays[i] + "'";
+                }
+                msg += ". Declared parameters: ";
+                for (size_t i = 0; i < declaredNames.size(); ++i)
+                {
+                    if (i)
+                        msg += ", ";
+                    msg += "'" + declaredNames[i] + "'";
+                }
+                result.diagnostics += msg;
+                return result;
+            }
+        }
+
+        // Stable storage for any expression strings we hand to Slang as
+        // `SpecializationArg::fromExpr`. fromType args reference TypeReflection
+        // pointers owned by the session, so they don't need backing.
+        std::vector<std::string> exprStorage;
+        exprStorage.reserve(tpCount);
+        std::vector<slang::SpecializationArg> specArgs;
+        specArgs.reserve(tpCount);
+
+        for (unsigned i = 0; i < tpCount; ++i)
+        {
+            auto it = argByName.find(declaredNames[i]);
+            if (it == argByName.end())
+            {
+                result.diagnostics += "\nmissing typeArg for generic parameter '" + declaredNames[i] + "'";
+                return result;
+            }
+            const std::string& value = it->second;
+
+            // Fast path: plain type name. Resolving via reflection surfaces
+            // clean "unknown type X" errors from the type checker rather than
+            // from the deep specializer, and reuses a parsed TypeReflection*.
+            slang::TypeReflection* resolved = preLayout->findTypeByName(value.c_str());
+            if (resolved)
+            {
+                specArgs.push_back(slang::SpecializationArg::fromType(resolved));
+            }
+            else
+            {
+                // Fallback: Slang expression (e.g. `Array<Metal, 4>`, `Gen<Float3>`).
+                // Slang will parse and check it as part of specialize().
+                exprStorage.push_back(value);
+                specArgs.push_back(slang::SpecializationArg::fromExpr(exprStorage.back().c_str()));
+            }
+        }
+
+        Slang::ComPtr<slang::IComponentType> specialized;
+        Slang::ComPtr<slang::IBlob>          specDiag;
+        if (SLANG_FAILED(composite->specialize(specArgs.data(), static_cast<SlangInt>(specArgs.size()),
+                                               specialized.writeRef(), specDiag.writeRef())))
+        {
+            if (specDiag)
+                result.diagnostics.append(static_cast<const char*>(specDiag->getBufferPointer()),
+                                          specDiag->getBufferSize());
+            return result;
+        }
+        composite = specialized;
     }
 
     Slang::ComPtr<slang::IComponentType> linked;

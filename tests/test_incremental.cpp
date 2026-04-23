@@ -9,7 +9,8 @@
 using namespace slangmake;
 namespace fs = std::filesystem;
 
-namespace {
+namespace
+{
 
 fs::path makeScratchDir(const char* tag)
 {
@@ -132,10 +133,10 @@ TEST_CASE("Modifying an included .hlsli invalidates the cache")
     bc.setQuiet(true);
 
     BatchCompiler::Input in;
-    in.file                  = src;
-    in.options.target        = Target::SPIRV;
-    in.options.profile       = "sm_6_5";
-    in.options.includePaths  = {scratch};
+    in.file                 = src;
+    in.options.target       = Target::SPIRV;
+    in.options.profile      = "sm_6_5";
+    in.options.includePaths = {scratch};
 
     bc.compileFile(in, outPath);
     CHECK(bc.lastStats().compiled == 2);

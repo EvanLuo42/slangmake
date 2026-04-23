@@ -1,7 +1,9 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -76,6 +78,15 @@ uint64_t hashFileContents(const std::filesystem::path& path);
  * @return  64-bit fingerprint
  */
 uint64_t hashCompileOptions(const CompileOptions& o);
+
+/**
+ * Split a `{a,b,c}`-style permutation value list on top-level commas only.
+ * Nested `()`, `[]`, `{}`, `<>`, and quoted strings are preserved.
+ *
+ * @param inside the substring between the outer braces
+ * @return       trimmed values, or std::nullopt on unbalanced nesting / quotes
+ */
+std::optional<std::vector<std::string>> parsePermutationValueList(std::string_view inside, bool allowAngleNesting);
 
 /**
  * Run `codec` over `in` and return the compressed bytes. Codec::None copies.

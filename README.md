@@ -9,13 +9,23 @@ rebuilds, parallel compilation and optional LZ4 / zstd compression.
 
 - **Permutation expansion** — declare variants inline in the `.slang` source
   with `// [permutation] NAME={a,b,c}` comments; slangmake takes the Cartesian
-  product and emits one entry per cell.
+  product and emits one entry per cell. Generic `type_param` axes are also
+  supported via `// [permutation type] NAME={T1,T2}` — each combination bakes
+  one fully specialised variant at compile time.
 - **Exhaustive reflection** — every `slang::ProgramLayout` table (types, type
   layouts, variables, varlayouts, functions, generics, decl tree, entry
   points, attributes, modifiers, descriptor sets, binding ranges, hashed
   strings, …) is serialised into a compact binary section inside the blob.
   Permutations whose reflection bytes turn out identical share a single
   payload in the file — no on-disk duplication.
+- **Shader-cursor navigation** — `ReflectionView::Cursor` is a Slang
+  `ShaderCursor`-style navigator over the serialised reflection:
+  `rv.rootCursor()["gMat"]["albedo"]` returns the resource's absolute
+  `(space, slot)`, auto-dereferences `ConstantBuffer` / `ParameterBlock`,
+  tracks per-category offsets, and can enumerate full descriptor-set layouts
+  for `VkDescriptorSetLayout` / D3D12 root-signature construction. No Slang
+  runtime required — works straight off the blob. See
+  [docs/cursor.md](docs/cursor.md) for the full reference.
 - **Zero-copy reader** — `BlobReader` and `ReflectionView` expose every
   section as a `std::span` into an in-memory buffer; no JSON parse at load.
 - **Incremental rebuilds** — second runs reuse existing entries when the
@@ -98,6 +108,7 @@ directory (directory-input mode, produces a parallel tree of `.bin`s).
 | `-I, --include <dir>` | — | Add include search path. Repeatable. |
 | `-D, --define <N[=V]>` | — | Global preprocessor define. Repeatable. |
 | `-P, --permutation <N={a,b}>` | — | CLI permutation override (beats file directives). Repeatable. |
+| `--permutation-type <N={T1,T2}>` | — | CLI type-parameter permutation override. Repeatable. |
 | `-O, --optimization 0..3` | `3` | Slang optimisation level. |
 | `-g, --debug` | off | Emit debug info. |
 | `-W, --warnings-as-errors` | off | Promote warnings. |
@@ -170,10 +181,41 @@ This produces 2 × 3 = 6 entries in the output blob, one per
 `(USE_SHADOW, QUALITY)` pair. CLI `-P NAME={...}` overrides a file-level
 directive entirely when names collide.
 
-Another supported magic comment is `// [noreflection]`, which opts that shader
-file out of reflection serialisation (bytecode is still emitted). This is a
-per-file equivalent of `--no-reflection` — useful for large utility shaders
-whose reflection you don't need at runtime.
+### Type-parameter permutations
+
+Module-scope `type_param` declarations can be varied the same way:
+
+```slang
+// [permutation type] MAT={Metal,Wood}
+
+interface IBrdf { float3 shade(); }
+struct Metal : IBrdf { float4 tint; float3 shade() { return tint.rgb; } }
+struct Wood  : IBrdf { Texture2D<float4> albedo; SamplerState samp; /* ... */ }
+
+type_param MAT : IBrdf;
+ParameterBlock<MAT> gMat;
+
+[shader("compute")] [numthreads(8, 1, 1)]
+void main(uint3 tid : SV_DispatchThreadID) { /* uses gMat.shade() */ }
+```
+
+Each combination is specialised at compile time into its own fully concrete
+variant — different reflection, different bindings, different bytecode — and
+keyed in the blob as `|MAT=Metal`, `|MAT=Wood`, etc. (A leading `|` marks
+type-only axes so the key never collides with a constant axis of the same
+name.) Look up at runtime with `reader->find(perm)` passing a `Permutation`
+with `typeArgs` populated.
+
+Runtime constructs that require a live Slang session — `IShaderObject::
+setObject`, `IComponentType::specialize`, dynamic `T` selection — are **not**
+supported. The whole point of this model is to bake the type axis at compile
+time so the ship build needs neither `slang.dll` nor shader source.
+
+### `[noreflection]`
+
+`// [noreflection]` opts a shader file out of reflection serialisation
+(bytecode is still emitted). Per-file equivalent of `--no-reflection` —
+useful for large utility shaders whose reflection you don't need at runtime.
 
 ## Library usage
 
@@ -240,6 +282,48 @@ if (auto entry = reader->find(q)) {
 `descriptorSets()`, `descriptorRanges()`, `decls()`, …) as `std::span`s into
 the decoded buffer, so you can walk the full reflection graph without
 allocating.
+
+### Bind resources with Cursor
+
+`ReflectionView::Cursor` mirrors Slang's `ShaderCursor` API. Navigate by
+field name or array index — container types (`ConstantBuffer`,
+`ParameterBlock`, `TextureBuffer`, `ShaderStorageBuffer`) are
+auto-dereferenced on access:
+
+```cpp
+ReflectionView rv(entry->reflection);
+auto root = rv.rootCursor();
+
+// Uniform write: engine memcpy's `src` into its CB at `(offset, size)`.
+auto color = root["uConstants"]["color"];
+auto loc   = color.uniformLocation();           // { offsetBytes, sizeBytes }
+memcpy(myCbStaging.data() + loc.offsetBytes, &color_rgba, loc.sizeBytes);
+
+// Resource bind: (space, index) ready for vkUpdateDescriptorSets or
+// D3D12 root-parameter hookup.
+auto tex     = root["uTexture"];
+auto texBind = *tex.resourceBinding();          // { space, index, category }
+writeDescriptor(texBind.space, texBind.index, myTextureView);
+
+// ParameterBlock descent: sub-space is automatically absorbed.
+auto albedo     = root["gMat"]["albedo"];
+auto albedoBind = *albedo.resourceBinding();     // space = gMat's sub-space
+writeDescriptor(albedoBind.space, albedoBind.index, woodAlbedoView);
+
+// Full descriptor-set layout for a ParameterBlock — use to build a
+// VkDescriptorSetLayout or a D3D12 root-signature table.
+for (const auto& set : root["gMat"].descriptorSetLayout()) {
+    for (const auto& b : set.bindings) {
+        // b.slot, b.count, b.bindingType (SLANG_BINDING_TYPE_*), b.category
+    }
+}
+
+// Container access: reach the implicit constant buffer behind a PB.
+auto implicitCb = root["gMat"].container();
+auto cbBind     = *implicitCb.resourceBinding();
+```
+
+Full reference: [docs/cursor.md](docs/cursor.md).
 
 ## Blob format (v1)
 
@@ -367,6 +451,10 @@ these tables, so `ReflectionView` is pure zero-copy on top of the bytes.
 
 - Permutation keys are joined as `NAME=VALUE_NAME=VALUE` with names sorted
   alphabetically — the same shader-constant set always produces the same key.
+  Permutations that include `type_param` axes append `|NAME=VALUE...` after
+  the constants section (leading `|` when there are no constants), so a key
+  like `|MAT=Metal` is unambiguously all-type-args and never collides with a
+  constant axis of the same name.
 - `optionsHash` is an FNV-1a 64 over every compile option that is stable
   across permutations (target, profile, defines, optimisation, matrix
   layout, …). A mismatch invalidates the whole cache.

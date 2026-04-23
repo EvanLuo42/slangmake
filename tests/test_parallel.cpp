@@ -10,13 +10,15 @@
 using namespace slangmake;
 namespace fs = std::filesystem;
 
-namespace {
+namespace
+{
 
 std::vector<std::vector<uint8_t>> collectCodes(BlobReader& reader)
 {
     std::vector<std::vector<uint8_t>> out;
     out.reserve(reader.entryCount());
-    for (size_t i = 0; i < reader.entryCount(); ++i) {
+    for (size_t i = 0; i < reader.entryCount(); ++i)
+    {
         auto e = reader.at(i);
         out.emplace_back(e.code.begin(), e.code.end());
     }

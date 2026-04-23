@@ -1,10 +1,11 @@
 #include <CLI/CLI.hpp>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <string>
 #include <vector>
 
-#include "slangmake.h"
+#include "slangmake_internal.h"
 
 namespace fs = std::filesystem;
 using namespace slangmake;
@@ -28,36 +29,31 @@ bool parseDefine(const std::string& s, ShaderConstant& out)
     return !out.name.empty();
 }
 
-bool parsePermutation(const std::string& s, PermutationDefine& out)
+bool parsePermutation(const std::string& s, PermutationDefine& out, bool allowAngleNesting)
 {
     // NAME={a,b,c}
+    auto trimCopy = [](std::string_view sv) -> std::string
+    {
+        size_t a = 0, b = sv.size();
+        while (a < b && std::isspace(static_cast<unsigned char>(sv[a])))
+            ++a;
+        while (b > a && std::isspace(static_cast<unsigned char>(sv[b - 1])))
+            --b;
+        return std::string(sv.substr(a, b - a));
+    };
+
     auto eq = s.find('=');
     if (eq == std::string::npos)
         return false;
-    out.name  = s.substr(0, eq);
-    auto rest = s.substr(eq + 1);
+    out.name  = trimCopy(std::string_view(s).substr(0, eq));
+    auto rest = trimCopy(std::string_view(s).substr(eq + 1));
     if (rest.size() < 2 || rest.front() != '{' || rest.back() != '}')
         return false;
-    auto inside = rest.substr(1, rest.size() - 2);
-    out.values.clear();
-    size_t pos = 0;
-    while (pos <= inside.size())
-    {
-        auto        comma = inside.find(',', pos);
-        std::string v     = (comma == std::string::npos) ? inside.substr(pos) : inside.substr(pos, comma - pos);
-        // trim
-        size_t a = 0, b = v.size();
-        while (a < b && std::isspace((unsigned char)v[a]))
-            ++a;
-        while (b > a && std::isspace((unsigned char)v[b - 1]))
-            --b;
-        v = v.substr(a, b - a);
-        if (!v.empty())
-            out.values.push_back(v);
-        if (comma == std::string::npos)
-            break;
-        pos = comma + 1;
-    }
+    auto values =
+        detail::parsePermutationValueList(std::string_view(rest).substr(1, rest.size() - 2), allowAngleNesting);
+    if (!values.has_value())
+        return false;
+    out.values = std::move(*values);
     return !out.name.empty() && !out.values.empty();
 }
 
@@ -113,10 +109,7 @@ int runDump(const fs::path& path, bool includeReflection)
     std::printf("\ndependencies (%zu):\n", deps.size());
     for (size_t i = 0; i < deps.size(); ++i)
     {
-        std::printf("  [%zu] %.*s  (hash 0x%016llx)\n",
-                    i,
-                    static_cast<int>(deps[i].path.size()),
-                    deps[i].path.data(),
+        std::printf("  [%zu] %.*s  (hash 0x%016llx)\n", i, static_cast<int>(deps[i].path.size()), deps[i].path.data(),
                     static_cast<unsigned long long>(deps[i].contentHash));
     }
 
@@ -130,7 +123,8 @@ int runDump(const fs::path& path, bool includeReflection)
         std::printf("        dep indices    : [");
         for (size_t k = 0; k < e.depIndices.size(); ++k)
         {
-            if (k) std::printf(", ");
+            if (k)
+                std::printf(", ");
             std::printf("%u", e.depIndices[k]);
         }
         std::printf("]\n");
@@ -148,20 +142,18 @@ int runDump(const fs::path& path, bool includeReflection)
             for (auto& ep : eps)
             {
                 std::printf("          - %.*s  (stage=%u, threads=[%u,%u,%u], wave=%u)\n",
-                            static_cast<int>(ep.name.size()), ep.name.data(),
-                            ep.stage,
-                            ep.threadGroupSize[0], ep.threadGroupSize[1], ep.threadGroupSize[2],
-                            ep.waveSize);
+                            static_cast<int>(ep.name.size()), ep.name.data(), ep.stage, ep.threadGroupSize[0],
+                            ep.threadGroupSize[1], ep.threadGroupSize[2], ep.waveSize);
                 for (auto& p : ep.parameters)
                 {
                     std::printf("              param %.*s: category=%u, set=%u, binding=%u, offset=%u, size=%u\n",
-                                static_cast<int>(p.name.size()), p.name.data(),
-                                p.category, p.space, p.binding, p.byteOffset, p.byteSize);
+                                static_cast<int>(p.name.size()), p.name.data(), p.category, p.space, p.binding,
+                                p.byteOffset, p.byteSize);
                 }
                 for (auto& [attrName, attrArgs] : ep.attributes)
                 {
-                    std::printf("              attribute %.*s (%zu args)\n",
-                                static_cast<int>(attrName.size()), attrName.data(), attrArgs.size());
+                    std::printf("              attribute %.*s (%zu args)\n", static_cast<int>(attrName.size()),
+                                attrName.data(), attrArgs.size());
                 }
             }
             auto globals = rv.decodedGlobalParameters();
@@ -171,8 +163,8 @@ int runDump(const fs::path& path, bool includeReflection)
                 for (auto& p : globals)
                 {
                     std::printf("          - %.*s: category=%u, set=%u, binding=%u, offset=%u, size=%u\n",
-                                static_cast<int>(p.name.size()), p.name.data(),
-                                p.category, p.space, p.binding, p.byteOffset, p.byteSize);
+                                static_cast<int>(p.name.size()), p.name.data(), p.category, p.space, p.binding,
+                                p.byteOffset, p.byteSize);
                 }
             }
         }
@@ -190,8 +182,7 @@ int main(int argc, char** argv)
     std::string dumpPath;
     bool        dumpReflection = false;
     app.add_option("--dump", dumpPath, "Print info about an existing .bin blob and exit");
-    app.add_flag("--dump-reflection", dumpReflection,
-                 "Also decode and print reflection contents when --dump is used");
+    app.add_flag("--dump-reflection", dumpReflection, "Also decode and print reflection contents when --dump is used");
 
     // Inputs (not CLI-required so --dump can be used standalone; checked manually below)
     std::string inputPath;
@@ -215,7 +206,11 @@ int main(int argc, char** argv)
 
     std::vector<std::string> permStrs;
     app.add_option("-P,--permutation", permStrs,
-                   "NAME={a,b,c} permutation override (CLI wins over file directives). Repeatable");
+                   "NAME={a,b,c} macro permutation override (CLI wins over file directives). Repeatable");
+
+    std::vector<std::string> permTypeStrs;
+    app.add_option("--permutation-type", permTypeStrs,
+                   "NAME={T1,T2} generic type-parameter permutation override. Repeatable");
 
     int optLevel = 3;
     app.add_option("-O,--optimization", optLevel, "Optimization level 0..3")->check(CLI::Range(0, 3));
@@ -338,11 +333,23 @@ int main(int argc, char** argv)
     for (auto& s : permStrs)
     {
         PermutationDefine p;
-        if (!parsePermutation(s, p))
+        if (!parsePermutation(s, p, false))
         {
             std::fprintf(stderr, "error: invalid -P '%s', expected NAME={a,b,c}\n", s.c_str());
             return 2;
         }
+        p.kind = PermutationDefine::Kind::Constant;
+        cliPerms.push_back(std::move(p));
+    }
+    for (auto& s : permTypeStrs)
+    {
+        PermutationDefine p;
+        if (!parsePermutation(s, p, true))
+        {
+            std::fprintf(stderr, "error: invalid --permutation-type '%s', expected NAME={T1,T2}\n", s.c_str());
+            return 2;
+        }
+        p.kind = PermutationDefine::Kind::Type;
         cliPerms.push_back(std::move(p));
     }
 
