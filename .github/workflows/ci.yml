@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'    # every branch; tags don't match and thus never trigger
+  pull_request:
+
+# If the same branch is pushed to again, cancel the in-flight CI run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Build & test (Windows, RelWithDebInfo)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/windows-relwithdebinfo/_deps
+          key: fetchcontent-${{ runner.os }}-relwithdebinfo-${{ hashFiles('cmake/Configure*.cmake', 'CMakeLists.txt') }}
+
+      - name: Configure
+        env:
+          CC: cl
+          CXX: cl
+        run: cmake --preset windows-relwithdebinfo
+
+      - name: Build
+        run: cmake --build --preset windows-relwithdebinfo
+
+      - name: Test
+        run: ctest --preset windows-relwithdebinfo
