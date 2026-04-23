@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build, install, package (windows-x86_64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/windows-release/_deps
+          key: fetchcontent-${{ runner.os }}-${{ hashFiles('cmake/Configure*.cmake', 'CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake --preset windows-release
+
+      - name: Build
+        run: cmake --build --preset windows-release
+
+      # Override the preset's installDir so everything lands in a single
+      # workspace-root folder that we can rename + zip in one step.
+      - name: Install
+        run: cmake --install build/windows-release --prefix install
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag  = "${{ github.ref_name }}"
+          $name = "slangmake-$tag-windows-x86_64"
+          Rename-Item -Path install -NewName $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: slangmake-*-windows-x86_64.zip
+          generate_release_notes: true

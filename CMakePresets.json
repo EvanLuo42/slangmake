@@ -1,0 +1,90 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "inherits": "windows-base",
+      "displayName": "Windows Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-release",
+      "inherits": "windows-base",
+      "displayName": "Windows Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SLANG_MAKE_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "inherits": "windows-base",
+      "displayName": "Windows RelWithDebInfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "displayName": "Build (Debug)"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "displayName": "Build (Release)"
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "configurePreset": "windows-relwithdebinfo",
+      "displayName": "Build (RelWithDebInfo)"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "displayName": "Test (Debug)",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "configurePreset": "windows-relwithdebinfo",
+      "displayName": "Test (RelWithDebInfo)",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

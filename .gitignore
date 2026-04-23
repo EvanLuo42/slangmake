@@ -1,0 +1,73 @@
+# Build / install staging directories
+build/
+out/
+cmake-build-*/
+bin/
+lib/
+install/
+stage/
+
+# Release artifacts
+slangmake-*-*-*.zip
+*.bin
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+Makefile
+CTestTestfile.cmake
+_deps/
+compile_commands.json
+
+# IDE - Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.*
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+x64/
+x86/
+Debug/
+Release/
+
+# IDE - JetBrains (CLion, etc.)
+.idea/
+*.iml
+
+# IDE - VS Code
+.vscode/
+*.code-workspace
+
+# IDE - Qt Creator
+CMakeLists.txt.user*
+
+# Compiled binaries
+*.exe
+*.out
+*.app
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exp
+*.pdb
+*.ilk
+*.idb
+
+# Dependency / package managers
+vcpkg_installed/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
