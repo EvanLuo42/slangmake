@@ -1,6 +1,7 @@
 #include <lz4.h>
 #include <zstd.h>
 
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>

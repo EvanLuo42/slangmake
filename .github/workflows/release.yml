@@ -17,6 +17,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # windows-latest has MinGW early on PATH, so raw cmake picks that up
+      # instead of MSVC. This action exports the VS Developer env (cl.exe,
+      # link.exe, rc.exe) into the remainder of the job.
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Cache FetchContent deps
         uses: actions/cache@v4
         with:
@@ -24,6 +30,9 @@ jobs:
           key: fetchcontent-${{ runner.os }}-${{ hashFiles('cmake/Configure*.cmake', 'CMakeLists.txt') }}
 
       - name: Configure
+        env:
+          CC:  cl
+          CXX: cl
         run: cmake --preset windows-release
 
       - name: Build
