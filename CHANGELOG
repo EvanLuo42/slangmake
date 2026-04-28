@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-28
+
 ### Added
 - End-to-end CLI tests (`tests/test_cli.cpp`) that drive the built `slangmake` executable via `std::system` and cover `--version`, missing-arg errors, unknown targets, compile + `--dump` round-trip, missing / malformed blob handling, file-declared permutation expansion, `-P` overrides and `--dump-reflection`.
 - Linux ASan + UBSan CI job (`linux-asan` preset + `sanitizers` job in `.github/workflows/ci.yml`) exercising the full test suite on every push and PR.
