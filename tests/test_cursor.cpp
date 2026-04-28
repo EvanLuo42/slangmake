@@ -1,4 +1,5 @@
 #include <doctest/doctest.h>
+#include <slang.h>
 
 #include <filesystem>
 

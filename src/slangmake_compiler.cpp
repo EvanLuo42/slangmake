@@ -11,9 +11,16 @@
 namespace slangmake
 {
 
-Compiler::Compiler()
+class Compiler::Impl
 {
-    if (const SlangResult rs = slang::createGlobalSession(m_globalSession.writeRef()); SLANG_FAILED(rs))
+public:
+    Slang::ComPtr<slang::IGlobalSession> globalSession;
+};
+
+Compiler::Compiler()
+    : m_impl(std::make_unique<Impl>())
+{
+    if (const SlangResult rs = slang::createGlobalSession(m_impl->globalSession.writeRef()); SLANG_FAILED(rs))
         throw std::runtime_error("slang::createGlobalSession failed");
 }
 
@@ -141,11 +148,12 @@ std::vector<std::string> findDuplicateBindingNames(std::span<const ShaderConstan
 Compiler::Result Compiler::compile(const CompileOptions& opts, const Permutation& perm) const
 {
     Result result;
-    if (!m_globalSession)
+    if (!m_impl || !m_impl->globalSession)
     {
         result.diagnostics = "no global session";
         return result;
     }
+    slang::IGlobalSession* gs = m_impl->globalSession;
 
     if (auto duplicateTypeArgs = findDuplicateBindingNames(perm.typeArgs); !duplicateTypeArgs.empty())
     {
@@ -185,7 +193,7 @@ Compiler::Result Compiler::compile(const CompileOptions& opts, const Permutation
     SlangCompileTarget tgt     = toSlangCompileTarget(opts.target);
     SlangProfileID     profile = SLANG_PROFILE_UNKNOWN;
     if (!opts.profile.empty())
-        profile = m_globalSession->findProfile(opts.profile.c_str());
+        profile = gs->findProfile(opts.profile.c_str());
 
     slang::TargetDesc targetDesc{};
     targetDesc.format                      = tgt;
@@ -212,7 +220,7 @@ Compiler::Result Compiler::compile(const CompileOptions& opts, const Permutation
     sessionDesc.compilerOptionEntryCount = static_cast<uint32_t>(optEntries.size());
 
     Slang::ComPtr<slang::ISession> session;
-    if (SLANG_FAILED(m_globalSession->createSession(sessionDesc, session.writeRef())))
+    if (SLANG_FAILED(gs->createSession(sessionDesc, session.writeRef())))
     {
         result.diagnostics = "failed to create session";
         return result;
@@ -453,7 +461,7 @@ Compiler::Result Compiler::compile(const CompileOptions& opts, const Permutation
     }
 
     if (opts.emitReflection)
-        result.reflection = detail::serializeReflection(m_globalSession, linked, module, 0);
+        result.reflection = detail::serializeReflection(gs, linked, module, 0);
     result.success = true;
     return result;
 }

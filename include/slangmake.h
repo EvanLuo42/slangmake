@@ -1,11 +1,9 @@
 #pragma once
 
-#include <slang-com-ptr.h>
-#include <slang.h>
-
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -86,14 +84,6 @@ const char* targetToString(Target t);
  * @return  the parsed target, or std::nullopt if unrecognised
  */
 std::optional<Target> parseTarget(std::string_view s);
-
-/**
- * Translate a slangmake target into the matching Slang enum value.
- *
- * @param t target to translate
- * @return  the corresponding SlangCompileTarget (e.g. SLANG_SPIRV)
- */
-SlangCompileTarget toSlangCompileTarget(Target t);
 
 struct ShaderConstant
 {
@@ -520,8 +510,10 @@ struct EntryPoint
 } // namespace fmt
 
 /**
- * Owns a slang::IGlobalSession and compiles a single permutation of a .slang
- * source on demand. One Compiler can be reused across many compile() calls.
+ * Compiles a single permutation of a .slang source on demand. Internally owns
+ * a Slang global session, but the Slang dependency is hidden behind a PImpl so
+ * `slangmake.h` consumers don't need slang headers / DLLs unless they actually
+ * instantiate Compiler. One Compiler can be reused across many compile() calls.
  */
 class Compiler
 {
@@ -551,10 +543,9 @@ public:
      */
     Result compile(const CompileOptions& opts, const Permutation& perm) const;
 
-    slang::IGlobalSession* globalSession() const { return m_globalSession; }
-
 private:
-    Slang::ComPtr<slang::IGlobalSession> m_globalSession;
+    class Impl;
+    std::unique_ptr<Impl> m_impl;
 };
 
 /**

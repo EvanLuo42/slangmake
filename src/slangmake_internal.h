@@ -1,5 +1,8 @@
 #pragma once
 
+#include <slang-com-ptr.h>
+#include <slang.h>
+
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -8,6 +11,17 @@
 #include <vector>
 
 #include "slangmake.h"
+
+namespace slangmake
+{
+/**
+ * Translate a slangmake target into the matching Slang enum value.
+ *
+ * @param t target to translate
+ * @return  the corresponding SlangCompileTarget (e.g. SLANG_SPIRV)
+ */
+SlangCompileTarget toSlangCompileTarget(Target t);
+} // namespace slangmake
 
 namespace slangmake::detail
 {

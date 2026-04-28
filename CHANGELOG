@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 - End-to-end CLI tests (`tests/test_cli.cpp`) that drive the built `slangmake` executable via `std::system` and cover `--version`, missing-arg errors, unknown targets, compile + `--dump` round-trip, missing / malformed blob handling, file-declared permutation expansion, `-P` overrides and `--dump-reflection`.
 - Linux ASan + UBSan CI job (`linux-asan` preset + `sanitizers` job in `.github/workflows/ci.yml`) exercising the full test suite on every push and PR.
+- `cmake/ConfigureDxc.cmake` fetches a pinned DirectX Shader Compiler release at configure time and copies / installs `dxcompiler.dll` + `dxil.dll` next to `slangmake.exe`, so DXIL targets work out of the box without a Windows SDK install. Version is controlled by `SLANG_MAKE_FETCH_DXC_VERSION` / `SLANG_MAKE_FETCH_DXC_DATE` cache vars (defaults: 1.9.2602 / 2026_02_20).
 
 ### Fixed
 - `BlobReader::at` and `BlobReader::dependencies` widened their offset + size bounds checks to `size_t` before adding, so a crafted entry record with `keyOffset = 0xFFFFFFF0, keySize = 0x20` can no longer wrap a `uint32_t` sum past `m_blob.size()` and read out of bounds.
@@ -16,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 - `BlobWriter` now deduplicates identical bytecode payloads across entries via the same FNV-1a + full-compare scheme already used for reflection. Two permutations that produce byte-identical SPIR-V / DXIL (dead-stripped axes, reflection-only differences, etc.) now share one on-disk payload. Blob format is unchanged; readers see no behavioural difference.
+- `slangmake.h` no longer includes `<slang.h>` / `<slang-com-ptr.h>`. The `Compiler` class hides its `Slang::ComPtr<slang::IGlobalSession>` behind a PImpl, and `toSlangCompileTarget` was moved to the internal header. Reader-only consumers (`BlobReader`, `ReflectionView`, `Cursor`) can now compile against `slangmake.h` without any Slang SDK on their include path. Removed `Compiler::globalSession()` and the public `toSlangCompileTarget` declaration.
+
+### Removed
+- Dead `${_slang_inc}/../prelude` compatibility branch in `ConfigureSlang.cmake`: current Slang releases ship prelude headers flat inside `include/`, so the parallel `prelude/` directory the branch was guarding against never exists.
 
 ## [0.2.0] - 2026-04-23
 

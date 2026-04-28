@@ -91,9 +91,6 @@ function(configure_slang target)
 
     target_link_libraries(${target} PUBLIC slang)
     target_include_directories(${target} PUBLIC ${_slang_inc})
-    if(EXISTS ${_slang_inc}/../prelude)
-        target_include_directories(${target} PUBLIC ${_slang_inc}/../prelude)
-    endif()
 
     set_property(GLOBAL PROPERTY _SLANG_BINARY_DIR ${_slang_bin})
 endfunction()

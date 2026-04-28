@@ -9,12 +9,6 @@ using namespace slangmake;
 
 namespace fs = std::filesystem;
 
-TEST_CASE("Compiler ctor succeeds and exposes a global session")
-{
-    Compiler c;
-    CHECK(c.globalSession() != nullptr);
-}
-
 TEST_CASE("Compiler::compile compiles compute.slang to SPIRV")
 {
     Compiler       c;

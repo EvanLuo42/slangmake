@@ -16,6 +16,8 @@ set(SLANG_MAKE_FETCH_CLI11_VERSION "2.6.2" CACHE STRING "CLI11 version to fetch"
 set(SLANG_MAKE_FETCH_DOCTEST_VERSION "2.4.11" CACHE STRING "doctest version to fetch")
 set(SLANG_MAKE_FETCH_LZ4_VERSION "1.10.0" CACHE STRING "LZ4 version to fetch")
 set(SLANG_MAKE_FETCH_ZSTD_VERSION "1.5.7" CACHE STRING "zstd version to fetch")
+set(SLANG_MAKE_FETCH_DXC_VERSION "1.9.2602" CACHE STRING "DirectX Shader Compiler version to fetch")
+set(SLANG_MAKE_FETCH_DXC_DATE "2026_02_20" CACHE STRING "DirectX Shader Compiler release date stamp (used in asset filename)")
 
 if (SLANG_MAKE_BUILD_SHARED)
     add_library(slangmake-lib SHARED)
@@ -55,6 +57,12 @@ include(ConfigureSlang)
 configure_slang(slangmake-lib VERSION ${SLANG_MAKE_FETCH_SLANG_VERSION})
 slang_copy_runtime_dlls(slangmake)
 
+include(ConfigureDxc)
+configure_dxc(slangmake-lib
+        VERSION ${SLANG_MAKE_FETCH_DXC_VERSION}
+        DATE ${SLANG_MAKE_FETCH_DXC_DATE})
+dxc_copy_runtime_dlls(slangmake)
+
 include(ConfigureLz4)
 configure_lz4(slangmake-lib VERSION ${SLANG_MAKE_FETCH_LZ4_VERSION})
 
@@ -85,3 +93,4 @@ install(FILES LICENSE README.md
         OPTIONAL)
 
 slang_install_runtime_libs(${CMAKE_INSTALL_BINDIR})
+dxc_install_runtime_libs(${CMAKE_INSTALL_BINDIR})
