@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-02
+
 ### Added
 - Pure C ABI wrapper (`include/slangmake.h` + `src/slangmake_c.cpp`) covering compiler, blob writer/reader, reflection view (raw tables only), and batch compiler. Format POD types are mirrored as `sm_fmt_*_t` and pinned layout-equal to their `fmt::*` C++ counterparts via `static_assert`. New `tests/test_capi.cpp` exercises the wrapper end-to-end.
 
