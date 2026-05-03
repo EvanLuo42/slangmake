@@ -1,1128 +1,611 @@
-#pragma once
+#ifndef SLANGMAKE_C_H
+#define SLANGMAKE_C_H
 
-#include <array>
-#include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
-namespace slangmake
-{
-enum class Target : uint32_t
-{
-    SPIRV,
-    DXIL,
-    DXBC,
-    HLSL,
-    GLSL,
-    Metal,
-    MetalLib,
-    WGSL,
-};
-
-enum class Optimization : uint32_t
-{
-    None,
-    Default,
-    High,
-    Maximal
-};
-
-enum class Codec : uint32_t
-{
-    None = 0,
-    LZ4  = 1,
-    Zstd = 2,
-};
-
-enum class MatrixLayout : uint32_t
-{
-    RowMajor,
-    ColumnMajor
-};
-
-enum class FloatingPointMode : uint32_t
-{
-    Default,
-    Fast,
-    Precise
-};
-
-/**
- * Canonical lowercase name of a codec.
+/*
+ * Pure C ABI wrapper around the slangmake C++ API.
  *
- * @param c codec to stringify
- * @return  "none", "lz4", or "zstd"
- */
-const char* codecToString(Codec c);
-
-/**
- * Parse a codec name (case-insensitive; accepts "none"/""/"lz4"/"zstd"/"zst").
+ * Designed for FFI consumers (Rust, Python, etc). The C++ surface in
+ * slangmake.hpp uses std::vector / std::span / std::filesystem::path / RAII
+ * classes that don't cross language boundaries cleanly; this header replaces
+ * them with opaque handles, UTF-8 const char* strings, and pointer+size pairs.
  *
- * @param s textual codec name
- * @return  the parsed codec, or std::nullopt if unrecognised
- */
-std::optional<Codec> parseCodec(std::string_view s);
-
-/**
- * Canonical name of a compile target.
+ * Lifetime conventions:
+ *   - Anything returned as a sm_*_t* is a heap-allocated handle that the
+ *     caller must release with the corresponding sm_*_destroy() function.
+ *   - const char* / const uint8_t* / span pointers returned from accessors
+ *     are owned by the parent handle and remain valid until that handle is
+ *     destroyed (or, for builders, until the next mutating call). Copy them
+ *     out if you need a longer lifetime.
+ *   - Functions that take const char* strings expect NUL-terminated UTF-8.
+ *     Pass NULL only where explicitly documented.
  *
- * @param t target to stringify
- * @return  the canonical spelling ("SPIRV", "DXIL", ...)
- */
-const char* targetToString(Target t);
-
-/**
- * Parse a target name (case-insensitive; accepts "SPIR-V"/"SPV" aliases).
+ * Error handling:
+ *   - Constructors return NULL on failure. Use sm_last_error() to read a
+ *     thread-local diagnostic.
+ *   - Status-returning calls use sm_status_t; SM_OK == 0 on success.
+ *   - Accessors with no error path return zero / empty values on bad input
+ *     rather than crashing.
  *
- * @param s textual target name
- * @return  the parsed target, or std::nullopt if unrecognised
+ * ABI stability:
+ *   - The fmt:: POD structs in slangmake.hpp are mirrored 1:1 here as
+ *     sm_fmt_*_t with #pragma pack(push, 4). Their layout is part of the
+ *     on-disk blob format and changes bump kBlobVersion / kReflectionVersion.
  */
-std::optional<Target> parseTarget(std::string_view s);
 
-struct ShaderConstant
+#include <stddef.h>
+#include <stdint.h>
+
+#if defined(_WIN32)
+#if defined(SLANGMAKE_C_STATIC)
+#define SLANGMAKE_C_API
+#elif defined(SLANGMAKE_C_BUILDING)
+#define SLANGMAKE_C_API __declspec(dllexport)
+#else
+#define SLANGMAKE_C_API __declspec(dllimport)
+#endif
+#else
+#define SLANGMAKE_C_API __attribute__((visibility("default")))
+#endif
+
+#ifdef __cplusplus
+extern "C"
 {
-    std::string name;
-    std::string value;
-};
+#endif
 
-struct PermutationDefine
-{
-    enum class Kind : uint32_t
+    /* ----- Status codes --------------------------------------------------- */
+    typedef int sm_status_t;
+#define SM_OK                 0
+#define SM_ERR_INVALID_HANDLE (-1)
+#define SM_ERR_INVALID_ARG    (-2)
+#define SM_ERR_NOT_FOUND      (-3)
+#define SM_ERR_IO             (-4)
+#define SM_ERR_INTERNAL       (-5)
+
+    /* Thread-local last error message (UTF-8). Empty string when no error
+     * has been recorded on the current thread. */
+    SLANGMAKE_C_API const char* sm_last_error(void);
+
+    /* ----- Format constants ---------------------------------------------- */
+    /* Mirror of slangmake::fmt:: constants. */
+#define SM_BLOB_MAGIC         0x474E4C53u /* 'SLNG' */
+#define SM_BLOB_VERSION       1u
+#define SM_REFLECTION_MAGIC   0x46524C53u /* 'SLRF' */
+#define SM_REFLECTION_VERSION 1u
+#define SM_INVALID_INDEX      0xFFFFFFFFu
+
+    /* ----- Enums --------------------------------------------------------- */
+    typedef enum sm_target
     {
-        Constant, // preprocessor #define (value is a literal/expression)
-        Type      // generic type parameter (value is a Slang type expression)
-    };
-    std::string              name;
-    std::vector<std::string> values;
-    Kind                     kind = Kind::Constant;
-};
+        SM_TARGET_SPIRV    = 0,
+        SM_TARGET_DXIL     = 1,
+        SM_TARGET_DXBC     = 2,
+        SM_TARGET_HLSL     = 3,
+        SM_TARGET_GLSL     = 4,
+        SM_TARGET_METAL    = 5,
+        SM_TARGET_METALLIB = 6,
+        SM_TARGET_WGSL     = 7
+    } sm_target_t;
 
-struct VulkanBindShift
-{
-    uint32_t kind  = 0; // 's','t','b','u' as ASCII u32
-    uint32_t space = 0;
-    uint32_t shift = 0;
-};
+    typedef enum sm_optimization
+    {
+        SM_OPT_NONE    = 0,
+        SM_OPT_DEFAULT = 1,
+        SM_OPT_HIGH    = 2,
+        SM_OPT_MAXIMAL = 3
+    } sm_optimization_t;
 
-struct CompileOptions
-{
-    std::filesystem::path              inputFile;
-    std::string                        entryPoint;
-    Target                             target = Target::SPIRV;
-    std::string                        profile;
-    std::vector<std::filesystem::path> includePaths;
-    std::vector<ShaderConstant>        defines;
-    Optimization                       optimization      = Optimization::High;
-    MatrixLayout                       matrixLayout      = MatrixLayout::RowMajor;
-    FloatingPointMode                  fpMode            = FloatingPointMode::Default;
-    bool                               debugInfo         = false;
-    bool                               warningsAsErrors  = false;
-    bool                               glslScalarLayout  = false;
-    bool                               emitSpirvDirectly = true;
-    bool                               dumpIntermediates = false;
-    bool                               emitReflection    = true;
-    int                                vulkanVersion     = 0;
-    std::vector<VulkanBindShift>       vulkanBindShifts;
-    std::string                        languageVersion;
-};
+    typedef enum sm_codec
+    {
+        SM_CODEC_NONE = 0,
+        SM_CODEC_LZ4  = 1,
+        SM_CODEC_ZSTD = 2
+    } sm_codec_t;
 
-struct Permutation
-{
-    std::vector<ShaderConstant> constants;
-    // Bindings for module-scope `type_param T : IFoo;` parameters. Name matches
-    // the type parameter's identifier; value is a Slang type expression passed
-    // to IComponentType::specialize as an Expr SpecializationArg.
-    std::vector<ShaderConstant> typeArgs;
+    typedef enum sm_matrix_layout
+    {
+        SM_MATRIX_ROW_MAJOR    = 0,
+        SM_MATRIX_COLUMN_MAJOR = 1
+    } sm_matrix_layout_t;
 
-    /**
-     * Canonical permutation key. Names are sorted alphabetically so two
-     * permutations with the same axes always produce the same key. When
-     * typeArgs is non-empty it is appended after a '|' separator so the key is
-     * backward-compatible with permutations that only use constants.
-     *
-     * @return the joined key, e.g. "A=0_B=1" or "A=0|T=Metal"; empty string
-     *         when both vectors are empty
-     */
-    [[nodiscard]] std::string key() const;
-};
+    typedef enum sm_fp_mode
+    {
+        SM_FP_DEFAULT = 0,
+        SM_FP_FAST    = 1,
+        SM_FP_PRECISE = 2
+    } sm_fp_mode_t;
 
-/**
- * Parses "// [permutation] NAME={a,b,c}" magic-comment directives from Slang
- * source text. Block comments are ignored. Malformed lines are dropped silently.
- */
-class PermutationParser
-{
-public:
-    /**
-     * Parse directives from an in-memory source buffer.
-     *
-     * @param source full slang source text
-     * @return       one PermutationDefine per directive, in source order
-     */
-    static std::vector<PermutationDefine> parse(std::string_view source);
+    typedef enum sm_perm_define_kind
+    {
+        SM_PERM_KIND_CONSTANT = 0,
+        SM_PERM_KIND_TYPE     = 1
+    } sm_perm_define_kind_t;
 
-    /**
-     * Parse directives from a .slang file on disk.
-     *
-     * @param path file system path to a slang source file
-     * @return     directives found; empty if the file is missing or unreadable
-     */
-    static std::vector<PermutationDefine> parseFile(const std::filesystem::path& path);
-};
+    /* Enum string helpers. */
+    SLANGMAKE_C_API const char* sm_target_to_string(sm_target_t t);
+    SLANGMAKE_C_API sm_status_t sm_target_from_string(const char* s, sm_target_t* out);
+    SLANGMAKE_C_API const char* sm_codec_to_string(sm_codec_t c);
+    SLANGMAKE_C_API sm_status_t sm_codec_from_string(const char* s, sm_codec_t* out);
 
-/**
- * Expands a list of PermutationDefines into the Cartesian product of their
- * values, one Permutation per cell.
- */
-class PermutationExpander
-{
-public:
-    /**
-     * Compute the Cartesian product of all directives' values.
-     *
-     * @param defs the permutation directives (typically after merge)
-     * @return     one Permutation per cell; always at least one entry (empty
-     *             permutation) when defs is empty
-     */
-    static std::vector<Permutation> expand(const std::vector<PermutationDefine>& defs);
-};
+    /* ----- Opaque handle forward declarations ---------------------------- */
+    typedef struct sm_buffer           sm_buffer_t;
+    typedef struct sm_compile_options  sm_compile_options_t;
+    typedef struct sm_permutation      sm_permutation_t;
+    typedef struct sm_perm_define_list sm_perm_define_list_t;
+    typedef struct sm_permutation_list sm_permutation_list_t;
+    typedef struct sm_compiler         sm_compiler_t;
+    typedef struct sm_compile_result   sm_compile_result_t;
+    typedef struct sm_blob_writer      sm_blob_writer_t;
+    typedef struct sm_blob_reader      sm_blob_reader_t;
+    typedef struct sm_reflection       sm_reflection_t;
+    typedef struct sm_batch_compiler   sm_batch_compiler_t;
+    typedef struct sm_batch_output     sm_batch_output_t;
 
-/**
- * Merge CLI overrides on top of file-level directives. On name collision, the
- * CLI value wins and replaces the file value list entirely.
- *
- * @param fileDefines directives recovered from the source file
- * @param cliOverride user-supplied `-P NAME={...}` overrides
- * @return            the merged directive list; CLI entries appended at the end
- */
-std::vector<PermutationDefine> mergePermutationDefines(const std::vector<PermutationDefine>& fileDefines,
-                                                       const std::vector<PermutationDefine>& cliOverride);
+    /* ----- Owned byte buffer --------------------------------------------- */
+    SLANGMAKE_C_API void           sm_buffer_destroy(sm_buffer_t* buf);
+    SLANGMAKE_C_API const uint8_t* sm_buffer_data(const sm_buffer_t* buf);
+    SLANGMAKE_C_API size_t         sm_buffer_size(const sm_buffer_t* buf);
 
-/**
- * Scan a Slang source buffer for a `// [noreflection]` magic comment. Block
- * comments are ignored.
- *
- * @param source full slang source text
- * @return       true if the directive is present anywhere in the file
- */
-bool sourceHasNoReflection(std::string_view source);
+    /* ----- CompileOptions builder --------------------------------------- */
+    SLANGMAKE_C_API sm_compile_options_t* sm_compile_options_create(void);
+    SLANGMAKE_C_API void                  sm_compile_options_destroy(sm_compile_options_t* opts);
 
-/**
- * File-path variant of sourceHasNoReflection.
- *
- * @param path file system path to a slang source file
- * @return     true if the file contains a `// [noreflection]` directive;
- *             false if the file is missing or unreadable
- */
-bool fileHasNoReflection(const std::filesystem::path& path);
+    SLANGMAKE_C_API void sm_compile_options_set_input_file(sm_compile_options_t* opts, const char* path);
+    SLANGMAKE_C_API void sm_compile_options_set_entry_point(sm_compile_options_t* opts, const char* name);
+    SLANGMAKE_C_API void sm_compile_options_set_target(sm_compile_options_t* opts, sm_target_t t);
+    SLANGMAKE_C_API void sm_compile_options_set_profile(sm_compile_options_t* opts, const char* profile);
+    SLANGMAKE_C_API void sm_compile_options_add_include_path(sm_compile_options_t* opts, const char* path);
+    SLANGMAKE_C_API void sm_compile_options_add_define(sm_compile_options_t* opts, const char* name, const char* value);
+    SLANGMAKE_C_API void sm_compile_options_clear_defines(sm_compile_options_t* opts);
+    SLANGMAKE_C_API void sm_compile_options_set_optimization(sm_compile_options_t* opts, sm_optimization_t o);
+    SLANGMAKE_C_API void sm_compile_options_set_matrix_layout(sm_compile_options_t* opts, sm_matrix_layout_t l);
+    SLANGMAKE_C_API void sm_compile_options_set_fp_mode(sm_compile_options_t* opts, sm_fp_mode_t m);
+    SLANGMAKE_C_API void sm_compile_options_set_debug_info(sm_compile_options_t* opts, int v);
+    SLANGMAKE_C_API void sm_compile_options_set_warnings_as_errors(sm_compile_options_t* opts, int v);
+    SLANGMAKE_C_API void sm_compile_options_set_glsl_scalar_layout(sm_compile_options_t* opts, int v);
+    SLANGMAKE_C_API void sm_compile_options_set_emit_spirv_directly(sm_compile_options_t* opts, int v);
+    SLANGMAKE_C_API void sm_compile_options_set_dump_intermediates(sm_compile_options_t* opts, int v);
+    SLANGMAKE_C_API void sm_compile_options_set_emit_reflection(sm_compile_options_t* opts, int v);
+    SLANGMAKE_C_API void sm_compile_options_set_vulkan_version(sm_compile_options_t* opts, int v);
+    SLANGMAKE_C_API void sm_compile_options_add_vulkan_bind_shift(sm_compile_options_t* opts, uint32_t kind,
+                                                                  uint32_t space, uint32_t shift);
+    SLANGMAKE_C_API void sm_compile_options_set_language_version(sm_compile_options_t* opts, const char* v);
 
-namespace fmt
-{
+    /* FNV-1a 64 fingerprint of every option field that affects bytecode
+     * identity across permutations. Useful for cache invalidation. */
+    SLANGMAKE_C_API uint64_t sm_compile_options_hash(const sm_compile_options_t* opts);
 
-constexpr uint32_t kBlobMagic         = 0x474E4C53; // 'SLNG'
-constexpr uint32_t kBlobVersion       = 1;
-constexpr uint32_t kReflectionMagic   = 0x46524C53; // 'SLRF'
-constexpr uint32_t kReflectionVersion = 1;
-constexpr uint32_t kInvalidIndex      = 0xFFFFFFFFu;
+    /* ----- Permutation builder ------------------------------------------ */
+    SLANGMAKE_C_API sm_permutation_t* sm_permutation_create(void);
+    SLANGMAKE_C_API void              sm_permutation_destroy(sm_permutation_t* perm);
 
+    SLANGMAKE_C_API void sm_permutation_add_constant(sm_permutation_t* perm, const char* name, const char* value);
+    SLANGMAKE_C_API void sm_permutation_add_type_arg(sm_permutation_t* perm, const char* name, const char* value);
+
+    /* Canonical alphabetical key. The returned pointer is invalidated by any
+     * subsequent add_* call on the same permutation. */
+    SLANGMAKE_C_API const char* sm_permutation_key(const sm_permutation_t* perm);
+
+    SLANGMAKE_C_API size_t      sm_permutation_constant_count(const sm_permutation_t* perm);
+    SLANGMAKE_C_API const char* sm_permutation_constant_name(const sm_permutation_t* perm, size_t idx);
+    SLANGMAKE_C_API const char* sm_permutation_constant_value(const sm_permutation_t* perm, size_t idx);
+    SLANGMAKE_C_API size_t      sm_permutation_type_arg_count(const sm_permutation_t* perm);
+    SLANGMAKE_C_API const char* sm_permutation_type_arg_name(const sm_permutation_t* perm, size_t idx);
+    SLANGMAKE_C_API const char* sm_permutation_type_arg_value(const sm_permutation_t* perm, size_t idx);
+
+    /* ----- PermutationDefine list (parse / merge / expand) -------------- */
+    SLANGMAKE_C_API sm_perm_define_list_t* sm_perm_define_list_create(void);
+    SLANGMAKE_C_API void                   sm_perm_define_list_destroy(sm_perm_define_list_t* list);
+    /* `values` is a pointer to `count` UTF-8 strings. */
+    SLANGMAKE_C_API void sm_perm_define_list_push(sm_perm_define_list_t* list, const char* name,
+                                                  sm_perm_define_kind_t kind, const char* const* values, size_t count);
+
+    SLANGMAKE_C_API size_t                sm_perm_define_list_size(const sm_perm_define_list_t* list);
+    SLANGMAKE_C_API const char*           sm_perm_define_list_name(const sm_perm_define_list_t* list, size_t i);
+    SLANGMAKE_C_API sm_perm_define_kind_t sm_perm_define_list_kind(const sm_perm_define_list_t* list, size_t i);
+    SLANGMAKE_C_API size_t                sm_perm_define_list_value_count(const sm_perm_define_list_t* list, size_t i);
+    SLANGMAKE_C_API const char* sm_perm_define_list_value(const sm_perm_define_list_t* list, size_t i, size_t v);
+
+    /* `len == 0` is treated as "find the NUL terminator". */
+    SLANGMAKE_C_API sm_perm_define_list_t* sm_parse_permutations_source(const char* src, size_t len);
+    SLANGMAKE_C_API sm_perm_define_list_t* sm_parse_permutations_file(const char* path);
+    SLANGMAKE_C_API sm_perm_define_list_t* sm_merge_permutations(const sm_perm_define_list_t* file_defines,
+                                                                 const sm_perm_define_list_t* cli_override);
+    SLANGMAKE_C_API int                    sm_source_has_no_reflection(const char* src, size_t len);
+    SLANGMAKE_C_API int                    sm_file_has_no_reflection(const char* path);
+
+    /* ----- Cartesian-product expansion ---------------------------------- */
+    SLANGMAKE_C_API sm_permutation_list_t* sm_expand_permutations(const sm_perm_define_list_t* defs);
+    SLANGMAKE_C_API void                   sm_permutation_list_destroy(sm_permutation_list_t* list);
+    SLANGMAKE_C_API size_t                 sm_permutation_list_size(const sm_permutation_list_t* list);
+    /* Returned permutation is owned by the caller (clone). Free with sm_permutation_destroy. */
+    SLANGMAKE_C_API sm_permutation_t* sm_permutation_list_clone_at(const sm_permutation_list_t* list, size_t i);
+
+    /* ----- Compiler ------------------------------------------------------ */
+    SLANGMAKE_C_API sm_compiler_t* sm_compiler_create(void);
+    SLANGMAKE_C_API void           sm_compiler_destroy(sm_compiler_t* c);
+
+    /* Always returns a result handle (or NULL on allocation failure). Use
+     * sm_compile_result_success() to check whether compilation actually
+     * succeeded; on failure, diagnostics are still populated. */
+    SLANGMAKE_C_API sm_compile_result_t* sm_compiler_compile(const sm_compiler_t* c, const sm_compile_options_t* opts,
+                                                             const sm_permutation_t* perm);
+
+    SLANGMAKE_C_API void           sm_compile_result_destroy(sm_compile_result_t* r);
+    SLANGMAKE_C_API int            sm_compile_result_success(const sm_compile_result_t* r);
+    SLANGMAKE_C_API const uint8_t* sm_compile_result_code(const sm_compile_result_t* r, size_t* out_size);
+    SLANGMAKE_C_API const uint8_t* sm_compile_result_reflection(const sm_compile_result_t* r, size_t* out_size);
+    SLANGMAKE_C_API const char*    sm_compile_result_diagnostics(const sm_compile_result_t* r);
+    SLANGMAKE_C_API size_t         sm_compile_result_dependency_count(const sm_compile_result_t* r);
+    SLANGMAKE_C_API const char*    sm_compile_result_dependency(const sm_compile_result_t* r, size_t idx);
+
+    /* ----- Blob writer --------------------------------------------------- */
+    SLANGMAKE_C_API sm_blob_writer_t* sm_blob_writer_create(sm_target_t target);
+    SLANGMAKE_C_API void              sm_blob_writer_destroy(sm_blob_writer_t* w);
+
+    /* `dep_indices` may be NULL (count must then be 0). */
+    SLANGMAKE_C_API void sm_blob_writer_add_entry(sm_blob_writer_t* w, const sm_permutation_t* perm,
+                                                  const uint8_t* code, size_t code_size, const uint8_t* reflection,
+                                                  size_t reflection_size, const uint32_t* dep_indices,
+                                                  size_t dep_count);
+
+    typedef struct sm_dep_info
+    {
+        const char* path;
+        uint64_t    content_hash;
+    } sm_dep_info_t;
+
+    SLANGMAKE_C_API void sm_blob_writer_set_dependencies(sm_blob_writer_t* w, const sm_dep_info_t* deps, size_t count);
+    SLANGMAKE_C_API void sm_blob_writer_set_options_hash(sm_blob_writer_t* w, uint64_t h);
+    SLANGMAKE_C_API void sm_blob_writer_set_compression(sm_blob_writer_t* w, sm_codec_t c);
+    SLANGMAKE_C_API size_t sm_blob_writer_entry_count(const sm_blob_writer_t* w);
+
+    /* Caller owns the returned buffer; free with sm_buffer_destroy. */
+    SLANGMAKE_C_API sm_buffer_t* sm_blob_writer_finalize(const sm_blob_writer_t* w);
+    SLANGMAKE_C_API sm_status_t  sm_blob_writer_write_to_file(const sm_blob_writer_t* w, const char* path);
+
+    /* ----- Blob reader --------------------------------------------------- */
+    /* Caller must keep `data` alive for the reader's lifetime. */
+    SLANGMAKE_C_API sm_blob_reader_t* sm_blob_reader_open_borrowed(const uint8_t* data, size_t size);
+    /* Reader takes its own internal copy of `data`. */
+    SLANGMAKE_C_API sm_blob_reader_t* sm_blob_reader_open_copy(const uint8_t* data, size_t size);
+    SLANGMAKE_C_API sm_blob_reader_t* sm_blob_reader_open_file(const char* path);
+    SLANGMAKE_C_API void              sm_blob_reader_destroy(sm_blob_reader_t* r);
+
+    SLANGMAKE_C_API int         sm_blob_reader_valid(const sm_blob_reader_t* r);
+    SLANGMAKE_C_API sm_target_t sm_blob_reader_target(const sm_blob_reader_t* r);
+    SLANGMAKE_C_API uint64_t    sm_blob_reader_options_hash(const sm_blob_reader_t* r);
+    SLANGMAKE_C_API sm_codec_t  sm_blob_reader_compression(const sm_blob_reader_t* r);
+    SLANGMAKE_C_API size_t      sm_blob_reader_entry_count(const sm_blob_reader_t* r);
+
+    typedef struct sm_blob_entry
+    {
+        const char*     key;
+        size_t          key_size;
+        const uint8_t*  code;
+        size_t          code_size;
+        const uint8_t*  reflection;
+        size_t          reflection_size;
+        const uint32_t* dep_indices;
+        size_t          dep_index_count;
+    } sm_blob_entry_t;
+
+    SLANGMAKE_C_API sm_status_t sm_blob_reader_at(const sm_blob_reader_t* r, size_t idx, sm_blob_entry_t* out);
+    SLANGMAKE_C_API sm_status_t sm_blob_reader_find(const sm_blob_reader_t* r, const sm_permutation_t* perm,
+                                                    sm_blob_entry_t* out);
+
+    SLANGMAKE_C_API size_t      sm_blob_reader_dependency_count(const sm_blob_reader_t* r);
+    SLANGMAKE_C_API const char* sm_blob_reader_dependency_path(const sm_blob_reader_t* r, size_t idx);
+    SLANGMAKE_C_API uint64_t    sm_blob_reader_dependency_hash(const sm_blob_reader_t* r, size_t idx);
+
+    /* ----- Reflection: fmt:: POD mirrors --------------------------------- */
 #pragma pack(push, 4)
 
-struct BlobHeader
-{
-    uint32_t magic;
-    uint32_t version;
-    uint32_t target;
-    uint32_t entryCount;
-    uint32_t depsOffset;
-    uint32_t depsCount;
-    uint32_t depsStringsOffset;
-    uint32_t depsStringsSize;
-    uint32_t entryDepsIdxOffset; // u32[] shared pool of per-entry dep indices
-    uint32_t entryDepsIdxCount;
-    uint32_t compression;
-    uint32_t uncompressedPayloadSize;
-    uint64_t optionsHash;
-};
-static_assert(sizeof(BlobHeader) == 56);
-
-struct DepEntry
-{
-    uint32_t pathOffset;
-    uint32_t pathSize;
-    uint64_t contentHash;
-};
-static_assert(sizeof(DepEntry) == 16);
-
-struct EntryRecord
-{
-    uint32_t keyOffset;
-    uint32_t keySize;
-    uint32_t codeOffset;
-    uint32_t codeSize;
-    uint32_t reflOffset;
-    uint32_t reflSize;
-    uint32_t depsIdxOff;   // into BlobHeader::entryDepsIdx pool
-    uint32_t depsIdxCount; // number of u32 indices into DepEntry[]
-};
-static_assert(sizeof(EntryRecord) == 32);
-
-struct ReflHeader
-{
-    uint32_t magic;
-    uint32_t version;
-    uint32_t size;
-    uint32_t flags;
-
-    uint32_t entryPointHashLow;
-    uint32_t entryPointHashHigh;
-    uint32_t globalCbBinding;
-    uint32_t globalCbSize;
-    uint32_t globalParamsVarLayoutIdx;
-    uint32_t bindlessSpaceIndex;
-
-    uint32_t strings_off, strings_size;
-    uint32_t hashedStr_off, hashedStr_count;
-    uint32_t attrArg_off, attrArg_count;
-    uint32_t attr_off, attr_count;
-    uint32_t modifier_off, modifier_count;
-    uint32_t type_off, type_count;
-    uint32_t typeLayout_off, typeLayout_count;
-    uint32_t var_off, var_count;
-    uint32_t varLayout_off, varLayout_count;
-    uint32_t func_off, func_count;
-    uint32_t generic_off, generic_count;
-    uint32_t decl_off, decl_count;
-    uint32_t entryPoint_off, entryPoint_count;
-    uint32_t bindingRange_off, bindingRange_count;
-    uint32_t descriptorSet_off, descriptorSet_count;
-    uint32_t descriptorRange_off, descriptorRange_count;
-    uint32_t subObjectRange_off, subObjectRange_count;
-    uint32_t u32Pool_off, u32Pool_count;
-};
-
-struct HashedStr
-{
-    uint32_t strIdx;
-    uint32_t hash;
-};
-
-struct AttrArg
-{
-    enum Kind : uint32_t
+    typedef struct sm_fmt_blob_header
     {
-        None   = 0,
-        Int    = 1,
-        Float  = 2,
-        String = 3
-    };
-    uint32_t kind;
-    uint32_t strIdx;
-    uint64_t raw;
-};
+        uint32_t magic;
+        uint32_t version;
+        uint32_t target;
+        uint32_t entry_count;
+        uint32_t deps_offset;
+        uint32_t deps_count;
+        uint32_t deps_strings_offset;
+        uint32_t deps_strings_size;
+        uint32_t entry_deps_idx_offset;
+        uint32_t entry_deps_idx_count;
+        uint32_t compression;
+        uint32_t uncompressed_payload_size;
+        uint64_t options_hash;
+    } sm_fmt_blob_header_t;
 
-struct Attribute
-{
-    uint32_t nameStrIdx;
-    uint32_t argOff;
-    uint32_t argCount;
-};
+    typedef struct sm_fmt_dep_entry
+    {
+        uint32_t path_offset;
+        uint32_t path_size;
+        uint64_t content_hash;
+    } sm_fmt_dep_entry_t;
 
-struct Type
-{
-    uint32_t kind;
-    uint32_t nameStrIdx;
-    uint32_t fullNameStrIdx;
-    uint32_t scalarKind;
-    uint32_t fieldCount;
-    uint32_t fieldPoolOff;
-    uint32_t rowCount;
-    uint32_t colCount;
-    uint32_t elementTypeIdx;
-    uint32_t elementCount;
-    uint32_t totalArrayElementCount;
-    uint32_t resourceShape;
-    uint32_t resourceAccess;
-    uint32_t resourceResultTypeIdx;
-};
+    typedef struct sm_fmt_entry_record
+    {
+        uint32_t key_offset;
+        uint32_t key_size;
+        uint32_t code_offset;
+        uint32_t code_size;
+        uint32_t refl_offset;
+        uint32_t refl_size;
+        uint32_t deps_idx_off;
+        uint32_t deps_idx_count;
+    } sm_fmt_entry_record_t;
 
-struct TypeLayout
-{
-    uint32_t typeIdx;
-    uint32_t kind;
-    uint32_t parameterCategory;
-    uint32_t categoryCount;
-    uint32_t categoryPoolOff;
-    uint32_t fieldCount;
-    uint32_t fieldLayoutPoolOff;
-    uint32_t containerVarLayoutIdx;
-    uint32_t elementTypeLayoutIdx;
-    uint32_t elementVarLayoutIdx;
-    uint32_t explicitCounterVarLayoutIdx;
-    uint32_t matrixLayoutMode;
-    uint32_t genericParamIndex;
-    uint32_t sizePoolOff;
-    uint32_t bindingRangeCount;
-    uint32_t bindingRangeOff;
-    uint32_t descriptorSetCount;
-    uint32_t descriptorSetOff;
-    uint32_t subObjectRangeCount;
-    uint32_t subObjectRangeOff;
-};
+    typedef struct sm_fmt_hashed_str
+    {
+        uint32_t str_idx;
+        uint32_t hash;
+    } sm_fmt_hashed_str_t;
 
-struct BindingRange
-{
-    uint32_t bindingType;
-    uint32_t bindingCount;
-    uint32_t leafTypeLayoutIdx;
-    uint32_t leafVariableIdx;
-    uint32_t imageFormat;
-    uint32_t isSpecializable;
-    uint32_t descriptorSetIndex;
-    uint32_t firstDescriptorRangeIndex;
-    uint32_t descriptorRangeCount;
-};
+    typedef struct sm_fmt_attr_arg
+    {
+        uint32_t kind; /* 0=None, 1=Int, 2=Float, 3=String */
+        uint32_t str_idx;
+        uint64_t raw;
+    } sm_fmt_attr_arg_t;
 
-struct DescriptorSet
-{
-    uint32_t spaceOffset;
-    uint32_t descriptorRangeStart;
-    uint32_t descriptorRangeCount;
-    uint32_t pad;
-};
+    typedef struct sm_fmt_attribute
+    {
+        uint32_t name_str_idx;
+        uint32_t arg_off;
+        uint32_t arg_count;
+    } sm_fmt_attribute_t;
 
-struct DescriptorRange
-{
-    uint32_t indexOffset;
-    uint32_t descriptorCount;
-    uint32_t bindingType;
-    uint32_t parameterCategory;
-};
+    typedef struct sm_fmt_type
+    {
+        uint32_t kind;
+        uint32_t name_str_idx;
+        uint32_t full_name_str_idx;
+        uint32_t scalar_kind;
+        uint32_t field_count;
+        uint32_t field_pool_off;
+        uint32_t row_count;
+        uint32_t col_count;
+        uint32_t element_type_idx;
+        uint32_t element_count;
+        uint32_t total_array_element_count;
+        uint32_t resource_shape;
+        uint32_t resource_access;
+        uint32_t resource_result_type_idx;
+    } sm_fmt_type_t;
 
-struct SubObjectRange
-{
-    uint32_t bindingRangeIndex;
-    uint32_t spaceOffset;
-    uint32_t offsetVarLayoutIdx;
-};
+    typedef struct sm_fmt_type_layout
+    {
+        uint32_t type_idx;
+        uint32_t kind;
+        uint32_t parameter_category;
+        uint32_t category_count;
+        uint32_t category_pool_off;
+        uint32_t field_count;
+        uint32_t field_layout_pool_off;
+        uint32_t container_var_layout_idx;
+        uint32_t element_type_layout_idx;
+        uint32_t element_var_layout_idx;
+        uint32_t explicit_counter_var_layout_idx;
+        uint32_t matrix_layout_mode;
+        uint32_t generic_param_index;
+        uint32_t size_pool_off;
+        uint32_t binding_range_count;
+        uint32_t binding_range_off;
+        uint32_t descriptor_set_count;
+        uint32_t descriptor_set_off;
+        uint32_t sub_object_range_count;
+        uint32_t sub_object_range_off;
+    } sm_fmt_type_layout_t;
 
-struct Variable
-{
-    uint32_t nameStrIdx;
-    uint32_t typeIdx;
-    uint32_t modifierOff;
-    uint32_t modifierCount;
-    uint32_t attrOff;
-    uint32_t attrCount;
-    uint32_t hasDefault;
-    uint32_t defaultKind; // 0=none, 1=int, 2=float
-    uint64_t defaultValueRaw;
-    uint32_t genericContainerIdx;
-};
+    typedef struct sm_fmt_binding_range
+    {
+        uint32_t binding_type;
+        uint32_t binding_count;
+        uint32_t leaf_type_layout_idx;
+        uint32_t leaf_variable_idx;
+        uint32_t image_format;
+        uint32_t is_specializable;
+        uint32_t descriptor_set_index;
+        uint32_t first_descriptor_range_index;
+        uint32_t descriptor_range_count;
+    } sm_fmt_binding_range_t;
 
-struct VarLayout
-{
-    uint32_t varIdx;
-    uint32_t typeLayoutIdx;
-    uint32_t category;
-    uint32_t categoryCount;
-    uint32_t categoryPoolOff;
-    uint32_t offsetPoolOff;
-    uint32_t bindingIndex;
-    uint32_t bindingSpacePoolOff;
-    uint32_t imageFormat;
-    uint32_t semanticNameStrIdx;
-    uint32_t semanticIndex;
-    uint32_t stage;
-    uint32_t modifierOff;
-    uint32_t modifierCount;
-    uint32_t attrOff;
-    uint32_t attrCount;
-};
+    typedef struct sm_fmt_descriptor_set
+    {
+        uint32_t space_offset;
+        uint32_t descriptor_range_start;
+        uint32_t descriptor_range_count;
+        uint32_t pad;
+    } sm_fmt_descriptor_set_t;
 
-struct Function
-{
-    uint32_t nameStrIdx;
-    uint32_t returnTypeIdx;
-    uint32_t paramVarOff;
-    uint32_t paramVarCount;
-    uint32_t modifierOff;
-    uint32_t modifierCount;
-    uint32_t attrOff;
-    uint32_t attrCount;
-    uint32_t genericContainerIdx;
-};
+    typedef struct sm_fmt_descriptor_range
+    {
+        uint32_t index_offset;
+        uint32_t descriptor_count;
+        uint32_t binding_type;
+        uint32_t parameter_category;
+    } sm_fmt_descriptor_range_t;
 
-struct Generic
-{
-    uint32_t nameStrIdx;
-    uint32_t innerDeclIdx;
-    uint32_t innerKind;
-    uint32_t typeParamOff;
-    uint32_t typeParamCount;
-    uint32_t valueParamOff;
-    uint32_t valueParamCount;
-    uint32_t constraintPoolOff; // (typeParamIdx, constraintTypeIdx) pairs
-    uint32_t constraintCount;
-    uint32_t outerGenericIdx;
-};
+    typedef struct sm_fmt_sub_object_range
+    {
+        uint32_t binding_range_index;
+        uint32_t space_offset;
+        uint32_t offset_var_layout_idx;
+    } sm_fmt_sub_object_range_t;
 
-struct Decl
-{
-    uint32_t kind;
-    uint32_t nameStrIdx;
-    uint32_t parentDeclIdx;
-    uint32_t childOff;
-    uint32_t childCount;
-    uint32_t payloadIdx;
-};
+    typedef struct sm_fmt_variable
+    {
+        uint32_t name_str_idx;
+        uint32_t type_idx;
+        uint32_t modifier_off;
+        uint32_t modifier_count;
+        uint32_t attr_off;
+        uint32_t attr_count;
+        uint32_t has_default;
+        uint32_t default_kind;
+        uint64_t default_value_raw;
+        uint32_t generic_container_idx;
+    } sm_fmt_variable_t;
 
-struct EntryPoint
-{
-    uint32_t nameStrIdx;
-    uint32_t nameOverrideStrIdx;
-    uint32_t stage;
-    uint32_t threadGroupSizeX;
-    uint32_t threadGroupSizeY;
-    uint32_t threadGroupSizeZ;
-    uint32_t waveSize;
-    uint32_t usesAnySampleRateInput;
-    uint32_t hasDefaultConstantBuffer;
-    uint32_t varLayoutIdx;
-    uint32_t typeLayoutIdx;
-    uint32_t resultVarLayoutIdx;
-    uint32_t functionIdx;
-    uint32_t paramVarLayoutOff;
-    uint32_t paramVarLayoutCount;
-    uint32_t attrOff;
-    uint32_t attrCount;
-    uint32_t hashLow;
-    uint32_t hashHigh;
-};
+    typedef struct sm_fmt_var_layout
+    {
+        uint32_t var_idx;
+        uint32_t type_layout_idx;
+        uint32_t category;
+        uint32_t category_count;
+        uint32_t category_pool_off;
+        uint32_t offset_pool_off;
+        uint32_t binding_index;
+        uint32_t binding_space_pool_off;
+        uint32_t image_format;
+        uint32_t semantic_name_str_idx;
+        uint32_t semantic_index;
+        uint32_t stage;
+        uint32_t modifier_off;
+        uint32_t modifier_count;
+        uint32_t attr_off;
+        uint32_t attr_count;
+    } sm_fmt_var_layout_t;
+
+    typedef struct sm_fmt_function
+    {
+        uint32_t name_str_idx;
+        uint32_t return_type_idx;
+        uint32_t param_var_off;
+        uint32_t param_var_count;
+        uint32_t modifier_off;
+        uint32_t modifier_count;
+        uint32_t attr_off;
+        uint32_t attr_count;
+        uint32_t generic_container_idx;
+    } sm_fmt_function_t;
+
+    typedef struct sm_fmt_generic
+    {
+        uint32_t name_str_idx;
+        uint32_t inner_decl_idx;
+        uint32_t inner_kind;
+        uint32_t type_param_off;
+        uint32_t type_param_count;
+        uint32_t value_param_off;
+        uint32_t value_param_count;
+        uint32_t constraint_pool_off;
+        uint32_t constraint_count;
+        uint32_t outer_generic_idx;
+    } sm_fmt_generic_t;
+
+    typedef struct sm_fmt_decl
+    {
+        uint32_t kind;
+        uint32_t name_str_idx;
+        uint32_t parent_decl_idx;
+        uint32_t child_off;
+        uint32_t child_count;
+        uint32_t payload_idx;
+    } sm_fmt_decl_t;
+
+    typedef struct sm_fmt_entry_point
+    {
+        uint32_t name_str_idx;
+        uint32_t name_override_str_idx;
+        uint32_t stage;
+        uint32_t thread_group_size_x;
+        uint32_t thread_group_size_y;
+        uint32_t thread_group_size_z;
+        uint32_t wave_size;
+        uint32_t uses_any_sample_rate_input;
+        uint32_t has_default_constant_buffer;
+        uint32_t var_layout_idx;
+        uint32_t type_layout_idx;
+        uint32_t result_var_layout_idx;
+        uint32_t function_idx;
+        uint32_t param_var_layout_off;
+        uint32_t param_var_layout_count;
+        uint32_t attr_off;
+        uint32_t attr_count;
+        uint32_t hash_low;
+        uint32_t hash_high;
+    } sm_fmt_entry_point_t;
 
 #pragma pack(pop)
 
-} // namespace fmt
-
-/**
- * Compiles a single permutation of a .slang source on demand. Internally owns
- * a Slang global session, but the Slang dependency is hidden behind a PImpl so
- * `slangmake.h` consumers don't need slang headers / DLLs unless they actually
- * instantiate Compiler. One Compiler can be reused across many compile() calls.
- */
-class Compiler
-{
-public:
-    Compiler();
-    ~Compiler();
-    Compiler(const Compiler&)            = delete;
-    Compiler& operator=(const Compiler&) = delete;
-
-    struct Result
-    {
-        bool                     success = false;
-        std::vector<uint8_t>     code;
-        std::vector<uint8_t>     reflection;
-        std::string              diagnostics;
-        std::vector<std::string> dependencies; // absolute paths reported by IModule
-    };
-
-    /**
-     * Compile a single permutation to target bytecode + packed reflection.
-     *
-     * @param opts compile-wide options (target, profile, includes, defines, ...)
-     * @param perm the permutation-specific defines overlaid on top of opts.defines
-     * @return     per-call Result with success flag, bytecode, reflection blob,
-     *             accumulated diagnostics and the list of dependency file paths
-     *             that slang saw during front-end parsing
-     */
-    Result compile(const CompileOptions& opts, const Permutation& perm) const;
-
-private:
-    class Impl;
-    std::unique_ptr<Impl> m_impl;
-};
-
-/**
- * Packs compiled entries into a single SLNG blob. Append entries with
- * addEntry(), optionally set dependency + options-hash + compression metadata,
- * then finalize() or writeToFile().
- */
-class BlobWriter
-{
-public:
-    explicit BlobWriter(Target target);
-
-    /**
-     * Append one compiled permutation to the blob.
-     *
-     * @param perm        permutation whose key() becomes the entry identifier
-     * @param code        target bytecode for the permutation
-     * @param reflection  packed reflection section, or an empty span to skip
-     * @param depIndices  indices into the blob-level dependency list
-     *                    (the one set via setDependencies) identifying the
-     *                    files this permutation actually read. Empty means
-     *                    "unknown / don't participate in per-entry reuse".
-     */
-    void addEntry(const Permutation& perm, std::span<const uint8_t> code, std::span<const uint8_t> reflection,
-                  std::span<const uint32_t> depIndices = {});
-
-    struct DepInfo
-    {
-        std::string path;
-        uint64_t    contentHash;
-    };
-
-    void setDependencies(std::vector<DepInfo> deps) { m_deps = std::move(deps); }
-    void setOptionsHash(uint64_t h) { m_optionsHash = h; }
-    void setCompression(Codec c) { m_compression = c; }
-
-    /**
-     * Serialise everything queued so far into a contiguous blob.
-     *
-     * @return the in-memory blob bytes; size depends on selected compression
-     */
-    std::vector<uint8_t> finalize() const;
-
-    /**
-     * Serialise to disk. Creates parent directories as needed.
-     *
-     * @param path destination file; overwritten if it exists
-     */
-    void writeToFile(const std::filesystem::path& path) const;
-
-    size_t entryCount() const { return m_entries.size(); }
-
-private:
-    Target m_target;
-    struct Entry
-    {
-        std::string           key;
-        std::vector<uint8_t>  code;
-        std::vector<uint8_t>  refl;
-        std::vector<uint32_t> depIndices;
-    };
-    std::vector<Entry>   m_entries;
-    std::vector<DepInfo> m_deps;
-    uint64_t             m_optionsHash = 0;
-    Codec                m_compression = Codec::None;
-};
-
-/**
- * Zero-copy reader over a packed SLNG blob. Entry code and reflection are
- * returned as spans into the in-memory buffer. If the blob is compressed, the
- * reader decompresses once at construction into an owned buffer and exposes
- * spans into that buffer thereafter.
- */
-class BlobReader
-{
-public:
-    /**
-     * Non-owning view. The caller must keep the underlying buffer alive for
-     * the lifetime of the BlobReader.
-     */
-    explicit BlobReader(std::span<const uint8_t> blob);
-
-    /**
-     * Take ownership of the buffer. Safe to use with rvalue finalize() output.
-     */
-    explicit BlobReader(std::vector<uint8_t>&& blob);
-
-    /**
-     * Construct a BlobReader by memory-loading a file from disk.
-     *
-     * @param path path to a .bin produced by BlobWriter
-     * @return     reader on success, std::nullopt on I/O or parse failure
-     */
-    static std::optional<BlobReader> openFile(const std::filesystem::path& path);
-
-    bool   valid() const { return m_hdr != nullptr; }
-    Target target() const;
-    size_t entryCount() const;
-
-    struct Entry
-    {
-        std::string_view          key;
-        std::span<const uint8_t>  code;
-        std::span<const uint8_t>  reflection;
-        std::span<const uint32_t> depIndices; // indices into dependencies()
-    };
-
-    /**
-     * Retrieve the Nth entry by index.
-     *
-     * @param index entry index in [0, entryCount())
-     * @return      spans over key/code/reflection; empty spans on out-of-range
-     */
-    Entry at(size_t index) const;
-
-    /**
-     * Find the entry whose key matches the alphabetical join of `constants`.
-     *
-     * @param constants permutation-define name/value pairs in any order
-     * @return          matching entry or std::nullopt
-     */
-    std::optional<Entry> find(std::span<const ShaderConstant> constants) const;
-
-    /**
-     * Find the entry whose key matches `perm.key()` verbatim. Use this overload
-     * when the permutation carries type-argument axes (`perm.typeArgs`) in
-     * addition to preprocessor constants.
-     *
-     * @param perm full permutation, constants and type arguments combined
-     * @return     matching entry or std::nullopt
-     */
-    std::optional<Entry> find(const Permutation& perm) const;
-
-    /**
-     * List every entry key in insertion order.
-     *
-     * @return the key of every entry in the blob
-     */
-    std::vector<std::string> enumerate() const;
-
-    struct Dep
-    {
-        std::string_view path;
-        uint64_t         contentHash;
-    };
-
-    std::vector<Dep> dependencies() const;
-    uint64_t         optionsHash() const;
-    Codec            compression() const;
-
-private:
-    std::span<const uint8_t> m_blob;
-    std::vector<uint8_t>     m_owned;
-    const fmt::BlobHeader*   m_hdr     = nullptr;
-    const fmt::EntryRecord*  m_entries = nullptr;
-
-    void rebind(std::span<const uint8_t> blob);
-};
-
-/**
- * Typed zero-copy view over a reflection section produced by the serializer.
- * Every table accessor returns a std::span into the underlying bytes; the
- * decoded* helpers walk the tables and materialise small convenience structs.
- */
-class ReflectionView
-{
-public:
-    explicit ReflectionView(std::span<const uint8_t> bytes);
-
-    bool valid() const { return m_hdr != nullptr; }
-
-    uint64_t                firstEntryPointHash() const;
-    uint32_t                globalConstantBufferBinding() const;
-    uint32_t                globalConstantBufferSize() const;
-    uint32_t                bindlessSpaceIndex() const;
-    std::optional<uint32_t> globalParamsVarLayout() const;
-
-    std::span<const fmt::Type>            types() const;
-    std::span<const fmt::TypeLayout>      typeLayouts() const;
-    std::span<const fmt::Variable>        variables() const;
-    std::span<const fmt::VarLayout>       varLayouts() const;
-    std::span<const fmt::Function>        functions() const;
-    std::span<const fmt::Generic>         generics() const;
-    std::span<const fmt::Decl>            decls() const;
-    std::span<const fmt::EntryPoint>      entryPoints() const;
-    std::span<const fmt::Attribute>       attributes() const;
-    std::span<const fmt::AttrArg>         attributeArgs() const;
-    std::span<const uint32_t>             modifierPool() const;
-    std::span<const fmt::HashedStr>       hashedStrings() const;
-    std::span<const fmt::BindingRange>    bindingRanges() const;
-    std::span<const fmt::DescriptorSet>   descriptorSets() const;
-    std::span<const fmt::DescriptorRange> descriptorRanges() const;
-    std::span<const fmt::SubObjectRange>  subObjectRanges() const;
-    std::span<const uint32_t>             u32Pool() const;
-
-    /**
-     * Resolve a string-pool index into an interned name.
-     *
-     * @param strIdx index into the reflection string pool
-     * @return       the interned NUL-terminated name; empty for kInvalidIndex
-     *               or out-of-range indices
-     */
-    std::string_view string(uint32_t strIdx) const;
-
-    /**
-     * Look up one of the `hashedStrings()` entries by its table index.
-     *
-     * @param index 0-based index into hashedStrings()
-     * @return      the interned name; empty view on out-of-range
-     */
-    std::string_view hashedString(uint32_t index) const;
-
-    struct Param
-    {
-        std::string_view name;
-        uint32_t         category;
-        uint32_t         space;
-        uint32_t         binding;
-        uint32_t         byteOffset;
-        uint32_t         byteSize;
-        uint32_t         elementCount;
-        uint32_t         imageFormat;
-        std::string_view semanticName;
-        uint32_t         semanticIndex;
-        uint32_t         stage;
-    };
-
-    struct EntryPointInfo
-    {
-        std::string_view        name;
-        std::string_view        nameOverride;
-        uint32_t                stage;           // from [shader("...")]
-        std::array<uint32_t, 3> threadGroupSize; // from [numthreads(...)]
-        uint32_t                waveSize;
-        uint64_t                hash;
-        std::vector<Param>      parameters;
-        /**
-         * User-defined attributes only. Slang reports built-in ones like
-         * `[shader("...")]` and `[numthreads(...)]` via dedicated reflection
-         * calls (surfaced here as `stage` and `threadGroupSize`) rather than
-         * through getUserAttribute*, so they will NOT appear in this list.
-         */
-        std::vector<std::pair<std::string_view, std::vector<fmt::AttrArg>>> attributes;
-    };
-
-    /**
-     * Decode every entry point and its parameters into a convenient struct.
-     *
-     * @return one EntryPointInfo per entry point recorded in the reflection
-     */
-    std::vector<EntryPointInfo> decodedEntryPoints() const;
-
-    /**
-     * Decode the global parameter block (shader-wide resources) into Params.
-     *
-     * @return one Param per global parameter of the program
-     */
-    std::vector<Param> decodedGlobalParameters() const;
-
-    struct DeclNode
-    {
-        uint32_t                  kind;
-        std::string_view          name;
-        std::span<const uint32_t> children;
-        uint32_t                  payloadIdx;
-        uint32_t                  parentDeclIdx;
-    };
-
-    std::optional<DeclNode> rootDecl() const;
-    DeclNode                decl(uint32_t idx) const;
-
-    /**
-     * Slang-ShaderCursor-style navigator over the serialized reflection tree.
-     *
-     * A Cursor is a value type pointing at a logical position inside a shader
-     * program's parameter block. Its primary operations are named/indexed
-     * traversal (`operator[]`) and query of the accumulated binding state at
-     * the current leaf (uniform byte offset, descriptor set/slot, per-category
-     * offsets).
-     *
-     * Container types — `ConstantBuffer<T>`, `ParameterBlock<T>`,
-     * `TextureBuffer<T>`, `ShaderStorageBuffer` — are auto-dereferenced on
-     * navigation so `root["cb"]["field"]` works the same as
-     * `root["cb"].dereference()["field"]`. Call `dereference()` explicitly only
-     * when you need the container layer itself (e.g. to bind the implicit
-     * constant buffer resource of a ParameterBlock).
-     *
-     * Offsets / spaces are tracked per SlangParameterCategory. A navigation
-     * step accumulates every category present on the visited VariableLayout,
-     * so a final Cursor's `offsetFor(Uniform)` is the full byte offset into
-     * its owning constant buffer, `spaceFor(DescriptorTableSlot)` is the
-     * final Vulkan set index, and so on — no caller-side arithmetic needed.
-     *
-     * The Cursor is non-owning and cheap to copy (~ 256 bytes).
-     */
-    class Cursor
-    {
-    public:
-        Cursor() = default;
-
-        bool valid() const { return m_rv != nullptr && m_typeLayoutIdx != fmt::kInvalidIndex; }
-
-        /**
-         * Navigate into a struct field by name. If the current type is a
-         * container (CB/PB/TextureBuffer/SSB), it is auto-dereferenced first.
-         *
-         * @param name field identifier
-         * @return     cursor at the field, or an invalid cursor if the name
-         *             doesn't resolve or the current type is not a struct
-         */
-        Cursor field(std::string_view name) const;
-
-        /**
-         * Navigate into an array element by index. Strides come from the
-         * element type's per-category size pool, so this works for arrays of
-         * uniforms, descriptor-bound resources, and anything else Slang lays
-         * out in a strided fashion.
-         *
-         * @param index element index (not bounds-checked against the array
-         *              length — caller is responsible for staying in range)
-         * @return      cursor at the element, or invalid if not an array
-         */
-        Cursor element(uint32_t index) const;
-
-        Cursor operator[](std::string_view name) const { return field(name); }
-        Cursor operator[](const char* name) const { return field(name); }
-        Cursor operator[](uint32_t index) const { return element(index); }
-
-        /**
-         * Explicitly step into a container type's element layout. Rarely
-         * needed because `field()` / `element()` auto-dereference; useful when
-         * you want to bind the container layer itself (e.g. the implicit CB
-         * behind a ParameterBlock).
-         */
-        Cursor dereference() const;
-
-        /**
-         * Inverse of `dereference()`: step onto the container layer of a
-         * ConstantBuffer<T> / ParameterBlock<T> / TextureBuffer<T> /
-         * ShaderStorageBuffer. The returned cursor represents the *container
-         * resource itself* (the implicit constant buffer of a PB, or the CB
-         * of a ConstantBuffer<T>), so `resourceBinding()` on it gives the
-         * (space, slot) where the engine must write the VkBuffer /
-         * ID3D12Resource handle.
-         *
-         * Returns an invalid cursor when the current type is not a container.
-         */
-        Cursor container() const;
-
-        /**
-         * Cursor for the explicit counter of an `AppendStructuredBuffer` /
-         * `ConsumeStructuredBuffer`. Invalid on anything else.
-         */
-        Cursor explicitCounter() const;
-
-        /**
-         * Name of the VariableLayout that produced this cursor (i.e. the name
-         * used in the last `field()` step). Empty when the cursor is at the
-         * root or at an array element.
-         */
-        std::string_view name() const;
-
-        uint32_t typeLayoutIndex() const { return m_typeLayoutIdx; }
-        uint32_t typeKind() const; // slang::TypeReflection::Kind value
-
-        /**
-         * Accumulated offset along a single SlangParameterCategory axis.
-         *
-         * @param category SLANG_PARAMETER_CATEGORY_* value
-         * @return         accumulated offset (byte count for Uniform / push
-         *                 constants, slot index for DescriptorTableSlot /
-         *                 D3D-style register categories)
-         */
-        uint32_t offsetFor(uint32_t category) const;
-
-        /**
-         * Accumulated space along a single SlangParameterCategory axis.
-         * For most categories this is the descriptor-set / register-space
-         * index relative to the program root.
-         */
-        uint32_t spaceFor(uint32_t category) const;
-
-        /**
-         * Size at the current cursor's type along a category axis, read from
-         * the serialized TypeLayout sizePool. Returns 0 when the category
-         * doesn't participate in the current type's layout.
-         */
-        uint32_t sizeFor(uint32_t category) const;
-        uint32_t strideFor(uint32_t category) const;
-
-        // Convenience shortcuts for the three categories nearly every engine
-        // bind path cares about. Equivalent to offsetFor/spaceFor with the
-        // corresponding SlangParameterCategory constants.
-        uint32_t uniformOffset() const;
-        uint32_t descriptorSlot() const;
-        uint32_t descriptorSet() const;
-
-        struct UniformLocation
-        {
-            uint32_t offsetBytes;
-            uint32_t sizeBytes;
-        };
-        /**
-         * Byte range `[offsetBytes, offsetBytes + sizeBytes)` into the
-         * enclosing constant buffer that this cursor covers. Valid only when
-         * the cursor sits in a uniform-bearing part of the layout; otherwise
-         * sizeBytes is 0.
-         */
-        UniformLocation uniformLocation() const;
-
-        struct ResourceBinding
-        {
-            uint32_t space;
-            uint32_t index;
-            uint32_t category; // SlangParameterCategory that supplied the binding
-        };
-        /**
-         * First non-uniform binding seen on this cursor: (space, index,
-         * category). Returns std::nullopt when the cursor is at a uniform-only
-         * leaf (e.g. a scalar inside a CB) or at an invalid position.
-         */
-        std::optional<ResourceBinding> resourceBinding() const;
-
-        // One descriptor range inside an enumerated descriptor set. Matches
-        // Slang's own (DescriptorSet, DescriptorRange) split: a single set
-        // may contain several ranges of different binding types.
-        struct DescriptorBindingInfo
-        {
-            uint32_t slot;        // binding index within the set
-            uint32_t count;       // descriptor count (array size; large for bindless)
-            uint32_t bindingType; // SlangBindingType (SLANG_BINDING_TYPE_*)
-            uint32_t category;    // SlangParameterCategory
-        };
-
-        struct DescriptorSetInfo
-        {
-            uint32_t                           space; // absolute descriptor-set / register-space index
-            std::vector<DescriptorBindingInfo> bindings;
-        };
-
-        /**
-         * Enumerate every descriptor set that belongs to the sub-tree rooted
-         * at this cursor. For a cursor on a ParameterBlock, these are the
-         * sets the PB needs — enough to build `VkDescriptorSetLayout` objects
-         * or a D3D12 root signature slice. For the root cursor on a global
-         * struct, these are the program-wide global sets.
-         *
-         * The returned `space` is absolute (cursor's accumulated space plus
-         * the set's internal offset), ready to hand to vkCmdBindDescriptorSets.
-         */
-        std::vector<DescriptorSetInfo> descriptorSetLayout() const;
-
-    private:
-        friend class ReflectionView;
-
-        // 32 slots cover every SlangParameterCategory value currently defined
-        // (the enum runs through the low 20s). Trivially copyable.
-        static constexpr size_t kMaxCategory = 32;
-
-        const ReflectionView*              m_rv            = nullptr;
-        uint32_t                           m_typeLayoutIdx = fmt::kInvalidIndex;
-        uint32_t                           m_varLayoutIdx  = fmt::kInvalidIndex;
-        std::array<uint32_t, kMaxCategory> m_offsets{};
-        std::array<uint32_t, kMaxCategory> m_spaces{};
-
-        void applyVarLayout(uint32_t vlIdx);
-        void autoDereference();
-    };
-
-    /**
-     * Cursor pointing at the program's global parameter block. From here,
-     * `operator[]` walks into any global resource or uniform field by name.
-     *
-     * @return an invalid cursor if the blob carries no global-params layout.
-     */
-    Cursor rootCursor() const;
-
-    /**
-     * Cursor pointing at the parameter block of entry point `entryPointIndex`.
-     * Entry-point uniforms are usually laid out in the entry-point's implicit
-     * constant buffer; use this cursor to address them.
-     *
-     * @param entryPointIndex index into entryPoints()
-     * @return                invalid cursor when the index is out of range
-     */
-    Cursor entryPointCursor(uint32_t entryPointIndex) const;
-
-    /**
-     * Convenience wrapper for `rootCursor()[name]`.
-     */
-    Cursor findGlobalParam(std::string_view name) const;
-
-private:
-    std::span<const uint8_t> m_bytes;
-    const fmt::ReflHeader*   m_hdr = nullptr;
-
-    Param decodeParam(const fmt::VarLayout& vl) const;
-};
-
-/**
- * High-level orchestration: parse permutation directives, expand them, drive
- * one or more Compiler instances (in parallel when requested), optionally
- * reuse entries from a previously-written blob, and pack the results.
- */
-class BatchCompiler
-{
-public:
-    explicit BatchCompiler(Compiler& compiler);
-
-    struct Input
-    {
-        std::filesystem::path          file;
-        CompileOptions                 options;
-        std::vector<PermutationDefine> cliOverride;
-    };
-
-    struct Output
-    {
-        std::filesystem::path    outputFile;
-        std::vector<uint8_t>     blob;
-        std::vector<Permutation> compiled;
-        std::vector<std::string> failures;
-    };
-
-    /**
-     * Compile one .slang file to one .bin blob.
-     *
-     * @param in      batch input (file, options, CLI overrides)
-     * @param outPath destination blob path
-     * @return        compiled permutations, failures, and the serialised blob
-     */
-    Output compileFile(const Input& in, const std::filesystem::path& outPath);
-
-    /**
-     * Recursively compile every .slang file under `root`, mirroring the tree
-     * into `outDir` with .bin extensions.
-     *
-     * @param root        input directory to walk
-     * @param base        options applied to every file found
-     * @param outDir      output directory root (created if missing)
-     * @param cliOverride permutation overrides applied uniformly to every file
-     * @return            one Output per discovered .slang source
-     */
-    std::vector<Output> compileDirectory(const std::filesystem::path& root, const CompileOptions& base,
-                                         const std::filesystem::path&          outDir,
-                                         const std::vector<PermutationDefine>& cliOverride = {});
-
-    void setKeepGoing(bool v) { m_keepGoing = v; }
-    void setVerbose(bool v) { m_verbose = v; }
-    void setQuiet(bool v) { m_quiet = v; }
-    void setJobs(int n) { m_jobs = n < 1 ? 1 : n; }
-    void setIncremental(bool v) { m_incremental = v; }
-    void setCompression(Codec c) { m_compression = c; }
-
-    struct Stats
-    {
-        size_t reused   = 0;
-        size_t compiled = 0;
-    };
-
-    /**
-     * Stats from the last compileFile() call.
-     *
-     * @return reference to the internal stats: how many entries were reused
-     *         from an existing blob versus compiled fresh this run
-     */
-    const Stats& lastStats() const { return m_stats; }
-
-private:
-    Compiler& m_compiler;
-    bool      m_keepGoing   = false;
-    bool      m_verbose     = false;
-    bool      m_quiet       = false;
-    bool      m_incremental = true;
-    int       m_jobs        = 1;
-    Codec     m_compression = Codec::None;
-    Stats     m_stats;
-};
-
-} // namespace slangmake
+    /* ----- ReflectionView ------------------------------------------------ */
+    SLANGMAKE_C_API sm_reflection_t* sm_reflection_open(const uint8_t* data, size_t size);
+    SLANGMAKE_C_API void             sm_reflection_destroy(sm_reflection_t* r);
+    SLANGMAKE_C_API int              sm_reflection_valid(const sm_reflection_t* r);
+
+    SLANGMAKE_C_API uint64_t sm_reflection_first_entry_point_hash(const sm_reflection_t* r);
+    SLANGMAKE_C_API uint32_t sm_reflection_global_cb_binding(const sm_reflection_t* r);
+    SLANGMAKE_C_API uint32_t sm_reflection_global_cb_size(const sm_reflection_t* r);
+    SLANGMAKE_C_API uint32_t sm_reflection_bindless_space(const sm_reflection_t* r);
+    /* Returns SM_INVALID_INDEX when there is no global params layout. */
+    SLANGMAKE_C_API uint32_t sm_reflection_global_params_var_layout(const sm_reflection_t* r);
+
+    /* String pool resolution. Returns "" for SM_INVALID_INDEX or out-of-range. */
+    SLANGMAKE_C_API const char* sm_reflection_string(const sm_reflection_t* r, uint32_t str_idx);
+    SLANGMAKE_C_API const char* sm_reflection_hashed_string(const sm_reflection_t* r, uint32_t index);
+
+    /* Raw POD table accessors. Pointers and counts reflect the on-disk layout
+     * directly; alignment is 4-byte everywhere because of #pragma pack(push, 4). */
+    SLANGMAKE_C_API const sm_fmt_type_t*          sm_reflection_types(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_type_layout_t*   sm_reflection_type_layouts(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_variable_t*      sm_reflection_variables(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_var_layout_t*    sm_reflection_var_layouts(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_function_t*      sm_reflection_functions(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_generic_t*       sm_reflection_generics(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_decl_t*          sm_reflection_decls(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_entry_point_t*   sm_reflection_entry_points(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_attribute_t*     sm_reflection_attributes(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_attr_arg_t*      sm_reflection_attribute_args(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const uint32_t*               sm_reflection_modifier_pool(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_hashed_str_t*    sm_reflection_hashed_strings(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_binding_range_t* sm_reflection_binding_ranges(const sm_reflection_t* r, size_t* count);
+    SLANGMAKE_C_API const sm_fmt_descriptor_set_t*   sm_reflection_descriptor_sets(const sm_reflection_t* r,
+                                                                                   size_t*                count);
+    SLANGMAKE_C_API const sm_fmt_descriptor_range_t* sm_reflection_descriptor_ranges(const sm_reflection_t* r,
+                                                                                     size_t*                count);
+    SLANGMAKE_C_API const sm_fmt_sub_object_range_t* sm_reflection_sub_object_ranges(const sm_reflection_t* r,
+                                                                                     size_t*                count);
+    SLANGMAKE_C_API const uint32_t*                  sm_reflection_u32_pool(const sm_reflection_t* r, size_t* count);
+
+    /* Walking the reflection tree to compute (set, slot, byte-offset) tuples
+     * is the RHI's job — slangmake exposes the raw tables above and stops
+     * there. Consumers build their own bind-path representation on top. */
+
+    /* ----- BatchCompiler ------------------------------------------------- */
+    SLANGMAKE_C_API sm_batch_compiler_t* sm_batch_compiler_create(sm_compiler_t* compiler);
+    SLANGMAKE_C_API void                 sm_batch_compiler_destroy(sm_batch_compiler_t* b);
+
+    SLANGMAKE_C_API void sm_batch_compiler_set_keep_going(sm_batch_compiler_t* b, int v);
+    SLANGMAKE_C_API void sm_batch_compiler_set_verbose(sm_batch_compiler_t* b, int v);
+    SLANGMAKE_C_API void sm_batch_compiler_set_quiet(sm_batch_compiler_t* b, int v);
+    SLANGMAKE_C_API void sm_batch_compiler_set_jobs(sm_batch_compiler_t* b, int n);
+    SLANGMAKE_C_API void sm_batch_compiler_set_incremental(sm_batch_compiler_t* b, int v);
+    SLANGMAKE_C_API void sm_batch_compiler_set_compression(sm_batch_compiler_t* b, sm_codec_t c);
+
+    SLANGMAKE_C_API size_t sm_batch_compiler_last_reused(const sm_batch_compiler_t* b);
+    SLANGMAKE_C_API size_t sm_batch_compiler_last_compiled(const sm_batch_compiler_t* b);
+
+    /* `cli_override` may be NULL. Always returns a non-NULL output handle on
+     * allocation success; check failures via sm_batch_output_failure_count. */
+    SLANGMAKE_C_API sm_batch_output_t* sm_batch_compile_file(sm_batch_compiler_t* b, const char* file,
+                                                             const sm_compile_options_t*  opts,
+                                                             const sm_perm_define_list_t* cli_override,
+                                                             const char*                  output_path);
+
+    SLANGMAKE_C_API void           sm_batch_output_destroy(sm_batch_output_t* o);
+    SLANGMAKE_C_API const char*    sm_batch_output_path(const sm_batch_output_t* o);
+    SLANGMAKE_C_API const uint8_t* sm_batch_output_blob(const sm_batch_output_t* o, size_t* out_size);
+    SLANGMAKE_C_API size_t         sm_batch_output_compiled_count(const sm_batch_output_t* o);
+    SLANGMAKE_C_API const char*    sm_batch_output_compiled_key(const sm_batch_output_t* o, size_t i);
+    /* Caller owns the clone; free with sm_permutation_destroy. */
+    SLANGMAKE_C_API sm_permutation_t* sm_batch_output_compiled_clone(const sm_batch_output_t* o, size_t i);
+    SLANGMAKE_C_API size_t            sm_batch_output_failure_count(const sm_batch_output_t* o);
+    SLANGMAKE_C_API const char*       sm_batch_output_failure(const sm_batch_output_t* o, size_t i);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* SLANGMAKE_C_H */

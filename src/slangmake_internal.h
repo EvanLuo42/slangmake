@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-#include "slangmake.h"
+#include "slangmake.hpp"
 
 namespace slangmake
 {

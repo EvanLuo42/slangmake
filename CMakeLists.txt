@@ -33,9 +33,15 @@ target_sources(slangmake-lib PRIVATE
         src/slangmake_reflection.cpp
         src/slangmake_compiler.cpp
         src/slangmake_batch.cpp
+        src/slangmake_c.cpp
         src/slangmake_internal.h
         include/slangmake.h
+        include/slangmake.hpp
 )
+target_compile_definitions(slangmake-lib PRIVATE SLANGMAKE_C_BUILDING)
+if (NOT SLANG_MAKE_BUILD_SHARED)
+    target_compile_definitions(slangmake-lib PUBLIC SLANGMAKE_C_STATIC)
+endif ()
 target_include_directories(slangmake-lib PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_BINARY_DIR}/generated/include)
@@ -85,6 +91,7 @@ install(TARGETS slangmake-lib
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 install(FILES include/slangmake.h
+        include/slangmake.hpp
         ${CMAKE_CURRENT_BINARY_DIR}/generated/include/slangmake_version.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 

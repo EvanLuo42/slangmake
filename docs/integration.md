@@ -1,6 +1,6 @@
 # Integration
 
-How to wire a slangmake blob into a shipping engine: loading, lookup, lifetime, pipeline-cache story, threading, memory. The "what do I do at runtime" companion to [cursor.md](cursor.md) (which covers *how* to use a parsed reflection to actually bind things) and [permutations.md](permutations.md) (which covers *how* to pick the right entry).
+How to wire a slangmake blob into a shipping engine: loading, lookup, lifetime, pipeline-cache story, threading, memory. Companion to [permutations.md](permutations.md) (which covers *how* to pick the right entry) and [reflection.md](reflection.md) (which covers the raw reflection tables your bind path consumes).
 
 ## Shipping surface
 
@@ -88,7 +88,6 @@ Typical shipping flow: slangmake blob ships with the game, `VkPipelineCache` per
 
 - Multiple threads may call `find`, `at`, `enumerate`, `dependencies`, `optionsHash`, etc. on the same reader concurrently without synchronisation.
 - `ReflectionView` shares this guarantee — multiple threads may each build their own `ReflectionView` over the same reflection bytes, or share one.
-- `Cursor` is a value type (≤256 bytes), trivially copyable. Passing between threads is fine; each thread's navigation operates on its own copy.
 
 Writers (`BlobWriter`, `BatchCompiler`) are not thread-safe — but you should only be using those at build time, not in the shipping runtime.
 
@@ -142,13 +141,12 @@ The reader decompresses once at open time into an owned buffer — so the choice
 
 slangmake doesn't do hot-reload directly — the blob is a frozen artefact. Typical dev-build pattern:
 
-1. **Editor build**: link the Slang runtime directly, use its `ISession` + `ShaderCursor` APIs. Hot-reload re-parses source.
+1. **Editor build**: link the Slang runtime directly, use its live `ISession` + reflection APIs. Hot-reload re-parses source.
 2. **Ship build**: link slangmake-lib, load the pre-built blob.
 
-The shader authoring code and Cursor-using bind code can share a common interface layer (both produce `(space, slot, offset, size)` bindings). The difference is the source of those numbers: live `ProgramLayout` at dev time, serialised `ReflectionView` at ship time.
+The bind path can share a common interface across both modes (both produce `(space, slot, offset, size)` tuples). The difference is the source of those numbers: live `ProgramLayout` at dev time, serialised `ReflectionView` at ship time.
 
 ## See also
 
-- [cursor.md](cursor.md) for what to do with a parsed `ReflectionView`.
 - [permutations.md](permutations.md) for how to build the `Permutation` you pass to `find`.
-- [reflection.md](reflection.md) if you need to go below the Cursor and walk raw tables.
+- [reflection.md](reflection.md) for the raw reflection tables your RHI consumes.

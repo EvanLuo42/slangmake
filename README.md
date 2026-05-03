@@ -18,14 +18,6 @@ rebuilds, parallel compilation and optional LZ4 / zstd compression.
   strings, …) is serialised into a compact binary section inside the blob.
   Permutations whose reflection bytes turn out identical share a single
   payload in the file — no on-disk duplication.
-- **Shader-cursor navigation** — `ReflectionView::Cursor` is a Slang
-  `ShaderCursor`-style navigator over the serialised reflection:
-  `rv.rootCursor()["gMat"]["albedo"]` returns the resource's absolute
-  `(space, slot)`, auto-dereferences `ConstantBuffer` / `ParameterBlock`,
-  tracks per-category offsets, and can enumerate full descriptor-set layouts
-  for `VkDescriptorSetLayout` / D3D12 root-signature construction. No Slang
-  runtime required — works straight off the blob. See
-  [docs/cursor.md](docs/cursor.md) for the full reference.
 - **Zero-copy reader** — `BlobReader` and `ReflectionView` expose every
   section as a `std::span` into an in-memory buffer; no JSON parse at load.
 - **Incremental rebuilds** — second runs reuse existing entries when the
@@ -77,7 +69,7 @@ Layout on Windows:
 install/
   bin/     slangmake.exe, slang*.dll
   lib/     slangmake.lib
-  include/ slangmake.h
+  include/ slangmake.h, slangmake.hpp
   share/slangmake/ LICENSE, README.md
 ```
 
@@ -219,13 +211,14 @@ useful for large utility shaders whose reflection you don't need at runtime.
 
 ## Library usage
 
-The CLI is a thin wrapper over the public API. Link `slangmake-lib` and
-`#include "slangmake.h"`.
+The CLI is a thin wrapper over the public API. C++ users link `slangmake-lib`
+and `#include "slangmake.hpp"`. C / FFI consumers (Rust, Python, …) get a
+matching opaque-handle ABI from `#include "slangmake.h"`.
 
 ### Compile once
 
 ```cpp
-#include "slangmake.h"
+#include "slangmake.hpp"
 using namespace slangmake;
 
 Compiler       c;
@@ -283,47 +276,14 @@ if (auto entry = reader->find(q)) {
 the decoded buffer, so you can walk the full reflection graph without
 allocating.
 
-### Bind resources with Cursor
+### Where binding-table walking lives
 
-`ReflectionView::Cursor` mirrors Slang's `ShaderCursor` API. Navigate by
-field name or array index — container types (`ConstantBuffer`,
-`ParameterBlock`, `TextureBuffer`, `ShaderStorageBuffer`) are
-auto-dereferenced on access:
-
-```cpp
-ReflectionView rv(entry->reflection);
-auto root = rv.rootCursor();
-
-// Uniform write: engine memcpy's `src` into its CB at `(offset, size)`.
-auto color = root["uConstants"]["color"];
-auto loc   = color.uniformLocation();           // { offsetBytes, sizeBytes }
-memcpy(myCbStaging.data() + loc.offsetBytes, &color_rgba, loc.sizeBytes);
-
-// Resource bind: (space, index) ready for vkUpdateDescriptorSets or
-// D3D12 root-parameter hookup.
-auto tex     = root["uTexture"];
-auto texBind = *tex.resourceBinding();          // { space, index, category }
-writeDescriptor(texBind.space, texBind.index, myTextureView);
-
-// ParameterBlock descent: sub-space is automatically absorbed.
-auto albedo     = root["gMat"]["albedo"];
-auto albedoBind = *albedo.resourceBinding();     // space = gMat's sub-space
-writeDescriptor(albedoBind.space, albedoBind.index, woodAlbedoView);
-
-// Full descriptor-set layout for a ParameterBlock — use to build a
-// VkDescriptorSetLayout or a D3D12 root-signature table.
-for (const auto& set : root["gMat"].descriptorSetLayout()) {
-    for (const auto& b : set.bindings) {
-        // b.slot, b.count, b.bindingType (SLANG_BINDING_TYPE_*), b.category
-    }
-}
-
-// Container access: reach the implicit constant buffer behind a PB.
-auto implicitCb = root["gMat"].container();
-auto cbBind     = *implicitCb.resourceBinding();
-```
-
-Full reference: [docs/cursor.md](docs/cursor.md).
+slangmake stops at the raw reflection tables. Computing `(set, slot,
+byte-offset)` tuples for `vkUpdateDescriptorSets` / D3D12 root-parameter
+hookup is the engine RHI's job — feed it `ReflectionView::variables() /
+varLayouts() / bindingRanges() / descriptorSets() / descriptorRanges()` and
+walk them in whatever way matches your bind path. See
+[docs/reflection.md](docs/reflection.md) for the table cross-reference.
 
 ## Blob format (v1)
 
@@ -466,7 +426,8 @@ these tables, so `ReflectionView` is pure zero-copy on top of the bytes.
 ```
 cmake/                 FetchContent wrappers for slang/CLI11/doctest/lz4/zstd
 include/
-  slangmake.h          Public API
+  slangmake.hpp        Public C++ API
+  slangmake.h          Pure C ABI wrapper for FFI consumers (Rust, Python, …)
 src/
   main.cpp             CLI
   slangmake_internal.h Private helpers shared across .cpps
@@ -475,6 +436,7 @@ src/
   slangmake_reflection.cpp  ReflectionSerializer + ReflectionView
   slangmake_compiler.cpp    Compiler (owns IGlobalSession)
   slangmake_batch.cpp       BatchCompiler (parse → expand → compile → pack)
+  slangmake_c.cpp           C ABI wrapper (matches include/slangmake.h)
 tests/                 doctest suite + .slang / .hlsli fixtures
 ```
 

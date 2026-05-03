@@ -15,7 +15,7 @@
 #include <sys/wait.h>
 #endif
 
-#include "slangmake.h"
+#include "slangmake.hpp"
 
 #ifndef SLANG_MAKE_TESTS_CLI_EXE
 #error "SLANG_MAKE_TESTS_CLI_EXE must be defined by the build"

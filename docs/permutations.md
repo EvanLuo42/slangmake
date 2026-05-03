@@ -39,8 +39,7 @@ A constant axis is essentially `#ifdef`. It changes the preprocessed source — 
 A type axis works through Slang's specialisation machinery, so:
 
 - The code inside the shader can use `type_param T : IBrdf` exactly once and slangmake produces one fully concrete variant per `T`.
-- Reflection reflects the **specialised** layout — `ParameterBlock<T>`'s binding footprint is correct for the concrete `T`, not for the generic placeholder.
-- The cursor navigates the specialised result directly.
+- Reflection reflects the **specialised** layout — `ParameterBlock<T>`'s binding footprint is correct for the concrete `T`, not for the generic placeholder. Bind-path walkers see the specialised tables directly.
 
 Type axes are the right answer whenever you would otherwise write a macro-switched `typedef` chain.
 
@@ -151,4 +150,4 @@ If a shader's axis count is genuinely in the thousands, consider two things befo
 
 The permutation system is a **compile-time enumeration**. Anything that requires changing the specialisation at bind time — `IShaderObject::setObject(slot, arbitraryIMaterialImpl)` style runtime polymorphism — is not reachable through slangmake alone. That workflow requires a live Slang session; the slangmake answer is to enumerate the concrete material types you actually ship as a type axis and look up the right entry.
 
-See also: [cursor.md](cursor.md) for how the compiled variants surface to bind code, and [integration.md](integration.md) for the runtime lookup patterns around permutation selection.
+See also: [reflection.md](reflection.md) for the raw tables a bind path consumes, and [integration.md](integration.md) for the runtime lookup patterns around permutation selection.

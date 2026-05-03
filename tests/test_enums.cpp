@@ -1,6 +1,6 @@
 #include <doctest/doctest.h>
 
-#include "slangmake.h"
+#include "slangmake.hpp"
 
 using namespace slangmake;
 

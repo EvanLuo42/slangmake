@@ -1,8 +1,6 @@
 # Raw reflection
 
-When the [Cursor](cursor.md) isn't enough — custom analyses, binding validation, IDE tooling, codegen from reflection, anything that walks the shader graph by shape rather than by name — you drop down to the raw reflection tables exposed by `ReflectionView`. This doc is the map.
-
-The Cursor is built on top of exactly these tables; if something the Cursor can do looks magical, you can replicate it here.
+`ReflectionView` exposes the on-disk reflection tables as zero-copy spans. This is the only reflection surface slangmake ships — converting the tables into the bind-time tuples a Vulkan / D3D12 / Metal RHI needs is left to the consuming engine. This doc is the map of what's in the tables.
 
 ## Table-index model
 
@@ -102,9 +100,9 @@ if (tl.kind == static_cast<uint32_t>(slang::TypeReflection::Kind::Struct)) {
 }
 ```
 
-## Reading per-category offsets by hand
+## Reading per-category offsets
 
-The Cursor does this for you, but the primitive is worth knowing:
+The primitive your bind path needs:
 
 ```cpp
 const auto& vl = rv.varLayouts()[someVarLayoutIdx];
@@ -160,7 +158,7 @@ for (uint32_t i = 0; i < tl.descriptorSetCount; ++i) {
 }
 ```
 
-`SubObjectRange` records connect a `BindingRange` to a space offset — this is what lets the Cursor compute the absolute space of a resource inside a nested `ParameterBlock`. The record's `bindingRangeIndex` points back into `bindingRanges()`; `spaceOffset` is the sub-object's space delta; `offsetVarLayoutIdx` gives you the `VarLayout` whose offsets you'd apply when descending.
+`SubObjectRange` records connect a `BindingRange` to a space offset — this is what lets a bind-path walker compute the absolute space of a resource inside a nested `ParameterBlock`. The record's `bindingRangeIndex` points back into `bindingRanges()`; `spaceOffset` is the sub-object's space delta; `offsetVarLayoutIdx` gives you the `VarLayout` whose offsets you'd apply when descending.
 
 ## Entry points
 
@@ -182,7 +180,7 @@ for (const auto& ep : rv.entryPoints()) {
 }
 ```
 
-`decodedEntryPoints()` is a convenience wrapper that materialises this into a vector of structs with the Cursor-style `Param` decoded — use it for simple cases, drop to the raw table for bulk analysis.
+`decodedEntryPoints()` is a convenience wrapper that materialises this into a vector of structs with each `Param` decoded — use it for simple cases, drop to the raw table for bulk analysis.
 
 ## Attributes
 
@@ -229,24 +227,20 @@ auto typeName  = rv.string(t.fullNameStrIdx);
 auto varName   = rv.string(v.nameStrIdx);
 ```
 
-## When to prefer `decodedEntryPoints` / `decodedGlobalParameters` / Cursor
+## When to prefer `decodedEntryPoints` / `decodedGlobalParameters`
 
 These helpers are there for the common 95%:
 
 - `decodedEntryPoints()` — shipping engines iterating per-stage info.
 - `decodedGlobalParameters()` — listing global bindings for logging.
-- `Cursor` — actually binding resources.
 
 Reach for the raw tables when:
 
 - You're walking the whole module structure, not just one variable.
 - You need the relationships across multiple records (e.g. "find every `VarLayout` whose `TypeLayout`'s `kind` is `ShaderResource` **and** whose owning `Variable` has a specific user attribute").
 - You're generating offline code (C++ bind headers, rust-style FFI stubs, shader linting rules).
-- You care about the `SubObjectRange` / `BindingRange` structure directly because you're implementing a non-trivial descriptor set allocator.
-
-Every Cursor fact is derivable from the raw tables; the raw tables contain facts the Cursor doesn't expose (binding ranges for custom allocators, sub-object range spaceOffsets for non-PB existentials, etc.).
+- You're implementing the engine's bind path: `(set, slot, byte-offset)` resolution against `BindingRange` / `DescriptorSet` / `DescriptorRange` / `SubObjectRange` is the expected consumer of these tables.
 
 ## See also
 
-- [cursor.md](cursor.md) — how to not write this code if you don't have to.
-- The `fmt::*` struct definitions in `include/slangmake.h` are the ground truth for every field mentioned here.
+- The `fmt::*` struct definitions in `include/slangmake.hpp` are the ground truth for every field mentioned here. The C-side `sm_fmt_*_t` mirrors in `include/slangmake.h` are kept layout-compatible via `static_assert` in `src/slangmake_c.cpp`.

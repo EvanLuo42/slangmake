@@ -4,7 +4,7 @@
 #include <fstream>
 #include <string>
 
-#include "slangmake.h"
+#include "slangmake.hpp"
 
 using namespace slangmake;
 namespace fs = std::filesystem;

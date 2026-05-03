@@ -20,7 +20,7 @@ cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset
 All unit tests live in one doctest binary (`slangmake_tests`). To filter *inside* the binary:
 
 ```bash
-build/windows-debug/bin/slangmake_tests --test-case='*cursor*'    # substring match on TEST_CASE names
+build/windows-debug/bin/slangmake_tests --test-case='*reflection*'  # substring match on TEST_CASE names
 build/windows-debug/bin/slangmake_tests --list-test-cases
 ```
 
@@ -42,13 +42,13 @@ Each stage maps to one `.cpp`:
 
 - **`src/slangmake_util.cpp`** — enum ↔ string, `PermutationParser` (scans `// [permutation]` / `// [permutation type]` / `// [noreflection]` magic comments), `PermutationExpander` (Cartesian product), FNV-1a hashing helpers (`hashCompileOptions`, `hashFileContents`), value-list splitter respecting nested `()[]{}<>` and quotes.
 - **`src/slangmake_compiler.cpp`** — `Compiler` owns one `slang::IGlobalSession`, applies `CompileOptions` + a `Permutation` (preprocessor defines **and** `IComponentType::specialize` type args), returns bytecode + serialized reflection + dep-file list.
-- **`src/slangmake_reflection.cpp`** — walks Slang's `ProgramLayout` and serialises every table (Types, TypeLayouts, Variables, VarLayouts, Functions, Generics, Decls, EntryPoints, Attributes, HashedStrings, BindingRanges, DescriptorSets/Ranges, SubObjectRanges) into a fixed-stride binary section (`SLRF` magic). Every cross-ref is a `u32` index; strings are pool-offsets. `ReflectionView` and `ReflectionView::Cursor` are the zero-copy readers.
+- **`src/slangmake_reflection.cpp`** — walks Slang's `ProgramLayout` and serialises every table (Types, TypeLayouts, Variables, VarLayouts, Functions, Generics, Decls, EntryPoints, Attributes, HashedStrings, BindingRanges, DescriptorSets/Ranges, SubObjectRanges) into a fixed-stride binary section (`SLRF` magic). Every cross-ref is a `u32` index; strings are pool-offsets. `ReflectionView` is the zero-copy reader. Walking the tables to compute concrete `(set, slot, byte-offset)` tuples is the consuming engine's RHI concern, not slangmake's.
 - **`src/slangmake_blob.cpp`** — `BlobWriter` packs entries into the `SLNG` blob (header → entry records → per-entry code/reflection → deps pool → per-entry dep-index pool), with FNV-1a dedup of both bytecode and reflection payloads so two permutations that compile to identical bytes share one on-disk copy. `BlobReader` is zero-copy over an in-memory buffer (owned or borrowed); LZ4/zstd decompression happens once at open.
 - **`src/slangmake_batch.cpp`** — `BatchCompiler` orchestrates the pipeline: merges CLI permutation overrides on top of file directives, runs `-j N` workers each with their own `Compiler`, drives per-entry incremental reuse by comparing `optionsHash` + per-entry `contentHash`-of-deps against an existing blob.
 
 ### On-disk layout
 
-The blob format (v1, little-endian, `SLNG` magic) is spec'd in `README.md` → "Blob format (v1)" and mirrored in `include/slangmake.h` under `namespace fmt`. Key invariants:
+The blob format (v1, little-endian, `SLNG` magic) is spec'd in `README.md` → "Blob format (v1)" and mirrored in `include/slangmake.hpp` under `namespace fmt` (with a C-side mirror of the same structs as `sm_fmt_*_t` in `include/slangmake.h`). Key invariants:
 
 - **Permutation keys** are `NAME=VALUE_NAME=VALUE` sorted alphabetically, with type-axis args appended after `|` (e.g. `A=0|MAT=Metal`). A leading `|` marks all-type-axis keys so they never collide with a constant axis of the same name.
 - **`optionsHash`** (FNV-1a 64) covers every `CompileOptions` field that is stable across permutations. Mismatch invalidates the whole cache.
@@ -64,13 +64,13 @@ Two axis kinds, same syntax:
 
 CLI `-P` / `--permutation-type` overrides **replace** a file-level directive with the same name entirely (see `mergePermutationDefines`). Runtime-dynamic type selection (`IShaderObject::setObject`, live `specialize`) is deliberately **not** supported — the point is that shipped binaries don't need `slang.dll` or source.
 
-### Public API shape (`include/slangmake.h`)
+### Public API shape (`include/slangmake.hpp` for C++; `include/slangmake.h` is the parallel C ABI used by FFI consumers, implemented in `src/slangmake_c.cpp`)
 
 Single header, ~1100 lines. Three layers:
 
 1. **Data types** — `CompileOptions`, `Permutation`, `PermutationDefine`, `ShaderConstant`, enums (`Target`, `Codec`, `Optimization`, …), format POD structs under `namespace fmt` (packed with `#pragma pack(push, 4)`).
 2. **Writers** — `Compiler::compile`, `BlobWriter::addEntry`/`finalize`/`writeToFile`, `BatchCompiler::compileFile`/`compileDirectory`.
-3. **Readers** — `BlobReader` (entries + deps), `ReflectionView` (raw tables + decoded helpers + `Cursor`).
+3. **Readers** — `BlobReader` (entries + deps), `ReflectionView` (raw tables + decoded helpers).
 
 `detail::` helpers shared across `.cpp`s live in `src/slangmake_internal.h` (hashing, padding, compression glue, `serializeReflection`). Don't add cross-TU utilities anywhere else.
 
@@ -79,5 +79,5 @@ Single header, ~1100 lines. Three layers:
 - C++20, `namespace slangmake`, single public header. Prefer `std::span` / `std::string_view` at API boundaries; don't return owned vectors where a span suffices.
 - Format POD structs under `fmt::` are serialized to disk — any field change is a **blob format break** and must bump `kBlobVersion` / `kReflectionVersion` in the same commit.
 - `#pragma pack(push, 4)` is load-bearing for the `fmt::` structs (`static_assert`s on `sizeof` live next to the definitions — keep them).
-- Tests are organised by subsystem (`test_blob.cpp`, `test_reflection.cpp`, `test_cursor.cpp`, `test_incremental.cpp`, `test_parallel.cpp`, `test_cli.cpp`, …). When adding a feature, extend the matching file rather than creating a new one.
+- Tests are organised by subsystem (`test_blob.cpp`, `test_reflection.cpp`, `test_incremental.cpp`, `test_parallel.cpp`, `test_cli.cpp`, `test_capi.cpp`, …). When adding a feature, extend the matching file rather than creating a new one.
 - `CHANGELOG` follows Keep-a-Changelog; add an `[Unreleased]` entry for user-visible changes.

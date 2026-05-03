@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <fstream>
 
-#include "slangmake.h"
+#include "slangmake.hpp"
 
 using namespace slangmake;
 

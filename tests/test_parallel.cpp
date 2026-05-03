@@ -5,7 +5,7 @@
 #include <set>
 #include <thread>
 
-#include "slangmake.h"
+#include "slangmake.hpp"
 
 using namespace slangmake;
 namespace fs = std::filesystem;

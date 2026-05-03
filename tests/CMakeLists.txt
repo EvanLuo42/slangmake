@@ -12,8 +12,8 @@ add_executable(slangmake_tests
         test_compression.cpp
         test_spirv_match.cpp
         test_type_specialization.cpp
-        test_cursor.cpp
-        test_cli.cpp)
+        test_cli.cpp
+        test_capi.cpp)
 
 target_link_libraries(slangmake_tests PRIVATE slangmake-lib)
 

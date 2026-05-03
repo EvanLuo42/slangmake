@@ -5,7 +5,7 @@
 #include <filesystem>
 #include <functional>
 
-#include "slangmake.h"
+#include "slangmake.hpp"
 
 using namespace slangmake;
 

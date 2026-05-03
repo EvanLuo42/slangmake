@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Pure C ABI wrapper (`include/slangmake.h` + `src/slangmake_c.cpp`) covering compiler, blob writer/reader, reflection view (raw tables only), and batch compiler. Format POD types are mirrored as `sm_fmt_*_t` and pinned layout-equal to their `fmt::*` C++ counterparts via `static_assert`. New `tests/test_capi.cpp` exercises the wrapper end-to-end.
+
+### Changed
+- The C++ public header has been renamed from `include/slangmake.h` to `include/slangmake.hpp`. The old filename is now the C ABI header described above. C++ consumers must update `#include "slangmake.h"` to `#include "slangmake.hpp"`.
+
+### Removed
+- `ReflectionView::Cursor` (and its `rootCursor` / `entryPointCursor` / `findGlobalParam` accessors) is gone, along with `tests/test_cursor.cpp` and `docs/cursor.md`. Walking the reflection tables to compute concrete `(set, slot, byte-offset)` tuples is the consuming engine's RHI concern, not slangmake's — `ReflectionView` still exposes every raw table needed to do that walk. References from `README.md`, `CLAUDE.md`, and the rest of `docs/` have been updated to match.
+
 ## [0.3.0] - 2026-04-28
 
 ### Added
