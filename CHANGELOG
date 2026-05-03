@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-02
+
+### Added
+- Standalone runtime library `slangmake-rt` (`slangmake-rt.dll` / `libslangmake-rt.so`). Exports the read side only — `BlobReader`, `BlobWriter`, `ReflectionView`, permutation parsers, hashing, compression — and links neither slang nor DXC. Consumers that only crack open shipped blobs no longer have to redistribute `slang.dll` / `slang-glslang.dll` / `slang-llvm.dll` / `dxcompiler.dll` / `dxil.dll`. The full `slangmake-lib` (with `Compiler` + `BatchCompiler`) is unchanged and still ships as `slangmake.dll`.
+- `SLANG_MAKE_EXPOSE_RUNTIME` / `SLANG_MAKE_EXPOSE_COMPILER` preprocessor gates in `slangmake.hpp` and `slangmake.h`. Default behaviour (neither defined) is unchanged: the full surface is exposed. Define just `SLANG_MAKE_EXPOSE_RUNTIME` to compile against the read side only — calls into `Compiler` / `BatchCompiler` then become a compile error instead of a deferred link error against the missing slangmake-rt symbols.
+
+### Changed
+- Source tree split along the runtime / compiler axis. `slangmake_internal.h` keeps the slang-using helpers; new `slangmake_internal_rt.h` holds everything pure (FNV mixers, alignment helpers, compression glue, options hashing, target↔blob-code mapping). Reflection serializer moved to `slangmake_reflection_serialize.cpp`; `toSlangCompileTarget` to `slangmake_util_compiler.cpp`; compiler / batch C ABI to `slangmake_c_compiler.cpp`. No public-API changes from this refactor — same headers, same symbols.
+- `BlobReader::target()` and `BlobWriter::finalize()` no longer call into Slang to encode `BlobHeader::target`. The integer codes (matching `SlangCompileTarget`) are kept verbatim for on-disk compatibility and pinned via `static_assert` in the compiler-side TU; existing blobs round-trip unchanged.
+
 ## [0.4.0] - 2026-05-02
 
 ### Added
