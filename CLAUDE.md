@@ -32,7 +32,7 @@ Project version is centralised in the top-level `project(slangmake VERSION ...)`
 
 ## Architecture
 
-slangmake is a one-target-per-blob Slang permutation compiler. The library (`slangmake-lib`) is the whole product; the CLI (`src/main.cpp`) is a thin CLI11 wrapper. The pipeline is:
+slangmake is a one-target-per-blob Slang permutation compiler. The full library (`slangmake-lib`, output name `slangmake`) owns compiler / batch / C ABI code and links Slang + DXC; the runtime library (`slangmake-rt-lib`, output name `slangmake-rt`) is the C++ blob / reflection reader surface and must stay free of Slang / DXC dependencies. The CLI (`src/main.cpp`) is a thin CLI11 wrapper over the full library. The pipeline is:
 
 ```
 parse directives → expand Cartesian product → compile each permutation → serialize reflection → pack into blob
@@ -42,7 +42,8 @@ Each stage maps to one `.cpp`:
 
 - **`src/slangmake_util.cpp`** — enum ↔ string, `PermutationParser` (scans `// [permutation]` / `// [permutation type]` / `// [noreflection]` magic comments), `PermutationExpander` (Cartesian product), FNV-1a hashing helpers (`hashCompileOptions`, `hashFileContents`), value-list splitter respecting nested `()[]{}<>` and quotes.
 - **`src/slangmake_compiler.cpp`** — `Compiler` owns one `slang::IGlobalSession`, applies `CompileOptions` + a `Permutation` (preprocessor defines **and** `IComponentType::specialize` type args), returns bytecode + serialized reflection + dep-file list.
-- **`src/slangmake_reflection.cpp`** — walks Slang's `ProgramLayout` and serialises every table (Types, TypeLayouts, Variables, VarLayouts, Functions, Generics, Decls, EntryPoints, Attributes, HashedStrings, BindingRanges, DescriptorSets/Ranges, SubObjectRanges) into a fixed-stride binary section (`SLRF` magic). Every cross-ref is a `u32` index; strings are pool-offsets. `ReflectionView` is the zero-copy reader. Walking the tables to compute concrete `(set, slot, byte-offset)` tuples is the consuming engine's RHI concern, not slangmake's.
+- **`src/slangmake_reflection.cpp`** — walks Slang's `ProgramLayout` and serialises every table (Types, TypeLayouts, Variables, VarLayouts, Functions, Generics, Decls, EntryPoints, Attributes, HashedStrings, BindingRanges, DescriptorSets/Ranges, SubObjectRanges) into a fixed-stride binary section (`SLRF` magic). Every cross-ref is a `u32` index; strings are pool-offsets.
+- **`src/slangmake_reflection_view.cpp`** — `ReflectionView`, the zero-copy reader over the serialised reflection section. This file is part of `slangmake-rt-lib`; do not include Slang headers here.
 - **`src/slangmake_blob.cpp`** — `BlobWriter` packs entries into the `SLNG` blob (header → entry records → per-entry code/reflection → deps pool → per-entry dep-index pool), with FNV-1a dedup of both bytecode and reflection payloads so two permutations that compile to identical bytes share one on-disk copy. `BlobReader` is zero-copy over an in-memory buffer (owned or borrowed); LZ4/zstd decompression happens once at open.
 - **`src/slangmake_batch.cpp`** — `BatchCompiler` orchestrates the pipeline: merges CLI permutation overrides on top of file directives, runs `-j N` workers each with their own `Compiler`, drives per-entry incremental reuse by comparing `optionsHash` + per-entry `contentHash`-of-deps against an existing blob.
 
@@ -72,7 +73,7 @@ Single header, ~1100 lines. Three layers:
 2. **Writers** — `Compiler::compile`, `BlobWriter::addEntry`/`finalize`/`writeToFile`, `BatchCompiler::compileFile`/`compileDirectory`.
 3. **Readers** — `BlobReader` (entries + deps), `ReflectionView` (raw tables + decoded helpers).
 
-`detail::` helpers shared across `.cpp`s live in `src/slangmake_internal.h` (hashing, padding, compression glue, `serializeReflection`). Don't add cross-TU utilities anywhere else.
+Runtime-safe `detail::` helpers shared across `.cpp`s live in `src/slangmake_runtime_internal.h` (hashing, padding, compression glue, blob target encoding). Slang-dependent helpers live in `src/slangmake_internal.h` (`toSlangCompileTarget`, `serializeReflection`). Keep Slang headers out of files compiled into `slangmake-rt-lib`.
 
 ## Conventions worth knowing
 

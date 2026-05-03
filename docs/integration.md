@@ -4,14 +4,15 @@ How to wire a slangmake blob into a shipping engine: loading, lookup, lifetime, 
 
 ## Shipping surface
 
-A slangmake-based pipeline needs three things on disk + two things in your binary:
+A slangmake-based runtime pipeline needs shader blobs plus the small runtime
+reader library:
 
 | What | Where | Typical size |
 | --- | --- | --- |
 | `*.bin` blobs | Asset directory | dominated by bytecode (SPIR-V etc.); reflection is a few KB per entry, deduplicated |
 | — | — | — |
-| `slangmake-lib` (static) | Linked into your engine | ~50-100 KB |
-| Nothing else | — | No slang.dll, no slang-compiler.dll, no .slang source, no runtime JSON |
+| `slangmake-rt` | Linked into your engine (`.lib` static or `.dll` dynamic) | small; blob reader, reflection view, LZ4/zstd only |
+| Nothing from Slang/DXC | — | No `slang.dll`, `slang-compiler.dll`, DXC DLLs, `.slang` source, or runtime JSON |
 
 Compared with the "ship Slang and compile at runtime" approach, you save ~38 MB of DLLs (`slang-compiler.dll` alone is ~32 MB on Windows) and several tens to hundreds of milliseconds of cold-start time — see the summary at the bottom of this doc.
 
@@ -142,7 +143,7 @@ The reader decompresses once at open time into an owned buffer — so the choice
 slangmake doesn't do hot-reload directly — the blob is a frozen artefact. Typical dev-build pattern:
 
 1. **Editor build**: link the Slang runtime directly, use its live `ISession` + reflection APIs. Hot-reload re-parses source.
-2. **Ship build**: link slangmake-lib, load the pre-built blob.
+2. **Ship build**: link `slangmake-rt`, load the pre-built blob.
 
 The bind path can share a common interface across both modes (both produce `(space, slot, offset, size)` tuples). The difference is the source of those numbers: live `ProgramLayout` at dev time, serialised `ReflectionView` at ship time.
 

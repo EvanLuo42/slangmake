@@ -6,7 +6,7 @@
 #include <string>
 #include <unordered_set>
 
-#include "slangmake_internal.h"
+#include "slangmake_runtime_internal.h"
 
 namespace slangmake
 {
@@ -89,29 +89,71 @@ std::optional<Codec> parseCodec(std::string_view s)
     return std::nullopt;
 }
 
-SlangCompileTarget toSlangCompileTarget(Target t)
+namespace detail
+{
+namespace
+{
+constexpr uint32_t kSlangTargetUnknown  = 0;
+constexpr uint32_t kSlangTargetGlsl     = 2;
+constexpr uint32_t kSlangTargetHlsl     = 5;
+constexpr uint32_t kSlangTargetSpirv    = 6;
+constexpr uint32_t kSlangTargetDxbc     = 8;
+constexpr uint32_t kSlangTargetDxil     = 10;
+constexpr uint32_t kSlangTargetMetal    = 24;
+constexpr uint32_t kSlangTargetMetalLib = 25;
+constexpr uint32_t kSlangTargetWgsl     = 28;
+} // namespace
+
+uint32_t encodeBlobTarget(Target t)
 {
     switch (t)
     {
     case Target::SPIRV:
-        return SLANG_SPIRV;
+        return kSlangTargetSpirv;
     case Target::DXIL:
-        return SLANG_DXIL;
+        return kSlangTargetDxil;
     case Target::DXBC:
-        return SLANG_DXBC;
+        return kSlangTargetDxbc;
     case Target::HLSL:
-        return SLANG_HLSL;
+        return kSlangTargetHlsl;
     case Target::GLSL:
-        return SLANG_GLSL;
+        return kSlangTargetGlsl;
     case Target::Metal:
-        return SLANG_METAL;
+        return kSlangTargetMetal;
     case Target::MetalLib:
-        return SLANG_METAL_LIB;
+        return kSlangTargetMetalLib;
     case Target::WGSL:
-        return SLANG_WGSL;
+        return kSlangTargetWgsl;
     }
-    return SLANG_TARGET_UNKNOWN;
+    return kSlangTargetUnknown;
 }
+
+Target decodeBlobTarget(uint32_t stored)
+{
+    switch (stored)
+    {
+    case kSlangTargetSpirv:
+        return Target::SPIRV;
+    case kSlangTargetDxil:
+        return Target::DXIL;
+    case kSlangTargetDxbc:
+        return Target::DXBC;
+    case kSlangTargetHlsl:
+        return Target::HLSL;
+    case kSlangTargetGlsl:
+        return Target::GLSL;
+    case kSlangTargetMetal:
+        return Target::Metal;
+    case kSlangTargetMetalLib:
+        return Target::MetalLib;
+    case kSlangTargetWgsl:
+        return Target::WGSL;
+    default:
+        return Target::SPIRV;
+    }
+}
+
+} // namespace detail
 
 std::string Permutation::key() const
 {

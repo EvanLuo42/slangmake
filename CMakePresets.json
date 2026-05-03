@@ -40,7 +40,32 @@
       "displayName": "Windows Release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "SLANG_MAKE_BUILD_TESTS": "OFF"
+        "SLANG_MAKE_BUILD_TESTS": "OFF",
+        "SLANG_MAKE_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "windows-release-shared",
+      "inherits": "windows-base",
+      "displayName": "Windows Release Shared",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SLANG_MAKE_BUILD_TESTS": "OFF",
+        "SLANG_MAKE_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "windows-release-static",
+      "inherits": "windows-base",
+      "displayName": "Windows Release Static",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SLANG_MAKE_BUILD_TESTS": "OFF",
+        "SLANG_MAKE_BUILD_SHARED": "OFF"
       }
     },
     {
@@ -86,6 +111,16 @@
       "name": "windows-release",
       "configurePreset": "windows-release",
       "displayName": "Build (Release)"
+    },
+    {
+      "name": "windows-release-shared",
+      "configurePreset": "windows-release-shared",
+      "displayName": "Build (Release Shared)"
+    },
+    {
+      "name": "windows-release-static",
+      "configurePreset": "windows-release-static",
+      "displayName": "Build (Release Static)"
     },
     {
       "name": "windows-relwithdebinfo",

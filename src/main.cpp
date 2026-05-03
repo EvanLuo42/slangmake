@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "slangmake_internal.h"
+#include "slangmake_runtime_internal.h"
 #include "slangmake_version.h"
 
 namespace fs = std::filesystem;

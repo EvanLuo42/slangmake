@@ -40,13 +40,16 @@ cmake -S . -B build
 cmake --build build
 ```
 
-By default this builds:
+By default this builds shared libraries:
 
-- `slangmake-lib` — the static library (object name `slangmake`).
+- `slangmake-rt-lib` — the C++ blob / reflection runtime library (object name
+  `slangmake-rt`). This target does not link Slang or DXC.
+- `slangmake-lib` — the compiler, batch compiler and C ABI library (object name
+  `slangmake`). This target links Slang, and ships DXC DLLs for DXIL output.
 - `slangmake` — the CLI executable.
 - `slangmake_tests` — doctest suite (disable with `-DSLANG_MAKE_BUILD_TESTS=OFF`).
 
-Build as a shared library with `-DSLANG_MAKE_BUILD_SHARED=ON`.
+Build static libraries with `-DSLANG_MAKE_BUILD_SHARED=OFF`.
 
 ### Run the tests
 
@@ -56,8 +59,9 @@ ctest --test-dir build --output-on-failure
 
 ### Install
 
-`cmake --install` stages a ready-to-ship tree: the CLI, the slang runtime
-shared libraries, the static library, the public header, and the license.
+`cmake --install` stages a ready-to-ship tree: the CLI, slang / DXC runtime
+DLLs needed by the compiler path, the slangmake libraries, the public headers,
+and the license.
 
 ```bash
 cmake --install build --prefix ./install --config Release
@@ -67,11 +71,22 @@ Layout on Windows:
 
 ```
 install/
-  bin/     slangmake.exe, slang*.dll
-  lib/     slangmake.lib
+  bin/     slangmake.exe, slangmake*.dll, slang*.dll, dxcompiler.dll, dxil.dll
+  lib/     slangmake.lib, slangmake-rt.lib
   include/ slangmake.h, slangmake.hpp
   share/slangmake/ LICENSE, README.md
 ```
+
+Release builds publish two Windows packages:
+
+- `*-dynamic.zip` — `slangmake.dll` + `slangmake-rt.dll` import libraries and
+  runtime DLLs.
+- `*-static.zip` — static `slangmake.lib` + `slangmake-rt.lib`, plus the CLI
+  and Slang / DXC DLLs needed by compiler usage.
+
+C++ shipping runtimes should link only `slangmake-rt` when they just need
+`BlobReader` / `ReflectionView`; that path does not require `slangmake.dll`,
+`slang.dll`, or DXC DLLs.
 
 ## CLI usage
 
@@ -439,4 +454,3 @@ src/
   slangmake_c.cpp           C ABI wrapper (matches include/slangmake.h)
 tests/                 doctest suite + .slang / .hlsli fixtures
 ```
-

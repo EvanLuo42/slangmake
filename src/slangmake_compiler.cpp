@@ -11,6 +11,30 @@
 namespace slangmake
 {
 
+SlangCompileTarget toSlangCompileTarget(Target t)
+{
+    switch (t)
+    {
+    case Target::SPIRV:
+        return SLANG_SPIRV;
+    case Target::DXIL:
+        return SLANG_DXIL;
+    case Target::DXBC:
+        return SLANG_DXBC;
+    case Target::HLSL:
+        return SLANG_HLSL;
+    case Target::GLSL:
+        return SLANG_GLSL;
+    case Target::Metal:
+        return SLANG_METAL;
+    case Target::MetalLib:
+        return SLANG_METAL_LIB;
+    case Target::WGSL:
+        return SLANG_WGSL;
+    }
+    return SLANG_TARGET_UNKNOWN;
+}
+
 class Compiler::Impl
 {
 public:

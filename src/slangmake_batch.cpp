@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "slangmake_internal.h"
+#include "slangmake_runtime_internal.h"
 
 namespace slangmake
 {

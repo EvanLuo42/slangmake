@@ -19,24 +19,46 @@ set(SLANG_MAKE_FETCH_ZSTD_VERSION "1.5.7" CACHE STRING "zstd version to fetch")
 set(SLANG_MAKE_FETCH_DXC_VERSION "1.9.2602" CACHE STRING "DirectX Shader Compiler version to fetch")
 set(SLANG_MAKE_FETCH_DXC_DATE "2026_02_20" CACHE STRING "DirectX Shader Compiler release date stamp (used in asset filename)")
 
+set(SLANGMAKE_RUNTIME_SOURCES
+        src/slangmake_util.cpp
+        src/slangmake_blob.cpp
+        src/slangmake_reflection_view.cpp
+        src/slangmake_runtime_internal.h
+        include/slangmake.h
+        include/slangmake.hpp
+)
+
 if (SLANG_MAKE_BUILD_SHARED)
+    add_library(slangmake-rt-lib SHARED)
+    set_target_properties(slangmake-rt-lib PROPERTIES
+            WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
     add_library(slangmake-lib SHARED)
     set_target_properties(slangmake-lib PROPERTIES
             WINDOWS_EXPORT_ALL_SYMBOLS ON)
 else ()
+    add_library(slangmake-rt-lib STATIC)
     add_library(slangmake-lib STATIC)
 endif ()
+set_target_properties(slangmake-rt-lib PROPERTIES OUTPUT_NAME slangmake-rt)
+target_sources(slangmake-rt-lib PRIVATE
+        ${SLANGMAKE_RUNTIME_SOURCES}
+)
+if (NOT SLANG_MAKE_BUILD_SHARED)
+    target_compile_definitions(slangmake-rt-lib PUBLIC SLANGMAKE_C_STATIC)
+endif ()
+target_include_directories(slangmake-rt-lib PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include)
+
 set_target_properties(slangmake-lib PROPERTIES OUTPUT_NAME slangmake)
 target_sources(slangmake-lib PRIVATE
-        src/slangmake_util.cpp
-        src/slangmake_blob.cpp
+        ${SLANGMAKE_RUNTIME_SOURCES}
         src/slangmake_reflection.cpp
         src/slangmake_compiler.cpp
         src/slangmake_batch.cpp
         src/slangmake_c.cpp
         src/slangmake_internal.h
-        include/slangmake.h
-        include/slangmake.hpp
 )
 target_compile_definitions(slangmake-lib PRIVATE SLANGMAKE_C_BUILDING)
 if (NOT SLANG_MAKE_BUILD_SHARED)
@@ -70,9 +92,11 @@ configure_dxc(slangmake-lib
 dxc_copy_runtime_dlls(slangmake)
 
 include(ConfigureLz4)
+configure_lz4(slangmake-rt-lib VERSION ${SLANG_MAKE_FETCH_LZ4_VERSION})
 configure_lz4(slangmake-lib VERSION ${SLANG_MAKE_FETCH_LZ4_VERSION})
 
 include(ConfigureZstd)
+configure_zstd(slangmake-rt-lib VERSION ${SLANG_MAKE_FETCH_ZSTD_VERSION})
 configure_zstd(slangmake-lib VERSION ${SLANG_MAKE_FETCH_ZSTD_VERSION})
 
 if (SLANG_MAKE_BUILD_TESTS)
@@ -83,6 +107,11 @@ endif ()
 include(GNUInstallDirs)
 
 install(TARGETS slangmake
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+install(TARGETS slangmake-rt-lib
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 install(TARGETS slangmake-lib

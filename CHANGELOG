@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `slangmake-rt-lib` (output name `slangmake-rt`) provides the C++ blob / reflection runtime without linking Slang or DXC. The full `slangmake-lib` still contains the same reader code, so compiler-side users do not need an extra runtime DLL.
+- Release CI now publishes separate Windows `dynamic` and `static` zip packages.
+
+### Changed
+- `ReflectionView` moved out of the Slang-dependent serializer translation unit, and blob target encoding no longer requires including Slang headers in runtime reader code.
+
 ## [0.4.0] - 2026-05-02
 
 ### Added
