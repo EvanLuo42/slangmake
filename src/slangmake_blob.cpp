@@ -7,7 +7,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "slangmake_internal.h"
+#include "slangmake_internal_rt.h"
 
 namespace slangmake::detail
 {
@@ -103,7 +103,7 @@ std::vector<uint8_t> BlobWriter::finalize() const
     fmt::BlobHeader hdr{};
     hdr.magic       = fmt::kBlobMagic;
     hdr.version     = fmt::kBlobVersion;
-    hdr.target      = static_cast<uint32_t>(toSlangCompileTarget(m_target));
+    hdr.target      = detail::targetToBlobCode(m_target);
     hdr.entryCount  = static_cast<uint32_t>(m_entries.size());
     hdr.optionsHash = m_optionsHash;
 
@@ -386,28 +386,7 @@ Target BlobReader::target() const
 {
     if (!m_hdr)
         return Target::SPIRV;
-    auto t = static_cast<SlangCompileTarget>(m_hdr->target);
-    switch (t)
-    {
-    case SLANG_SPIRV:
-        return Target::SPIRV;
-    case SLANG_DXIL:
-        return Target::DXIL;
-    case SLANG_DXBC:
-        return Target::DXBC;
-    case SLANG_HLSL:
-        return Target::HLSL;
-    case SLANG_GLSL:
-        return Target::GLSL;
-    case SLANG_METAL:
-        return Target::Metal;
-    case SLANG_METAL_LIB:
-        return Target::MetalLib;
-    case SLANG_WGSL:
-        return Target::WGSL;
-    default:
-        return Target::SPIRV;
-    }
+    return detail::blobCodeToTarget(m_hdr->target);
 }
 
 size_t BlobReader::entryCount() const { return m_hdr ? m_hdr->entryCount : 0; }

@@ -1,6 +1,14 @@
 #ifndef SLANGMAKE_C_H
 #define SLANGMAKE_C_H
 
+/* Selective API exposure. If neither macro is defined, expose the full API
+ * (default). Define exactly one of them to compile against just the runtime
+ * reader (matches what slangmake-rt.dll exports) or just the compiler surface. */
+#if !defined(SLANG_MAKE_EXPOSE_RUNTIME) && !defined(SLANG_MAKE_EXPOSE_COMPILER)
+#define SLANG_MAKE_EXPOSE_RUNTIME
+#define SLANG_MAKE_EXPOSE_COMPILER
+#endif
+
 /*
  * Pure C ABI wrapper around the slangmake C++ API.
  *
@@ -120,11 +128,13 @@ extern "C"
         SM_PERM_KIND_TYPE     = 1
     } sm_perm_define_kind_t;
 
+#ifdef SLANG_MAKE_EXPOSE_RUNTIME
     /* Enum string helpers. */
     SLANGMAKE_C_API const char* sm_target_to_string(sm_target_t t);
     SLANGMAKE_C_API sm_status_t sm_target_from_string(const char* s, sm_target_t* out);
     SLANGMAKE_C_API const char* sm_codec_to_string(sm_codec_t c);
     SLANGMAKE_C_API sm_status_t sm_codec_from_string(const char* s, sm_codec_t* out);
+#endif
 
     /* ----- Opaque handle forward declarations ---------------------------- */
     typedef struct sm_buffer           sm_buffer_t;
@@ -132,13 +142,19 @@ extern "C"
     typedef struct sm_permutation      sm_permutation_t;
     typedef struct sm_perm_define_list sm_perm_define_list_t;
     typedef struct sm_permutation_list sm_permutation_list_t;
-    typedef struct sm_compiler         sm_compiler_t;
-    typedef struct sm_compile_result   sm_compile_result_t;
-    typedef struct sm_blob_writer      sm_blob_writer_t;
-    typedef struct sm_blob_reader      sm_blob_reader_t;
-    typedef struct sm_reflection       sm_reflection_t;
-    typedef struct sm_batch_compiler   sm_batch_compiler_t;
-    typedef struct sm_batch_output     sm_batch_output_t;
+#ifdef SLANG_MAKE_EXPOSE_COMPILER
+    typedef struct sm_compiler       sm_compiler_t;
+    typedef struct sm_compile_result sm_compile_result_t;
+#endif
+#ifdef SLANG_MAKE_EXPOSE_RUNTIME
+    typedef struct sm_blob_writer sm_blob_writer_t;
+    typedef struct sm_blob_reader sm_blob_reader_t;
+    typedef struct sm_reflection  sm_reflection_t;
+#endif
+#ifdef SLANG_MAKE_EXPOSE_COMPILER
+    typedef struct sm_batch_compiler sm_batch_compiler_t;
+    typedef struct sm_batch_output   sm_batch_output_t;
+#endif
 
     /* ----- Owned byte buffer --------------------------------------------- */
     SLANGMAKE_C_API void           sm_buffer_destroy(sm_buffer_t* buf);
@@ -205,6 +221,7 @@ extern "C"
     SLANGMAKE_C_API size_t                sm_perm_define_list_value_count(const sm_perm_define_list_t* list, size_t i);
     SLANGMAKE_C_API const char* sm_perm_define_list_value(const sm_perm_define_list_t* list, size_t i, size_t v);
 
+#ifdef SLANG_MAKE_EXPOSE_RUNTIME
     /* `len == 0` is treated as "find the NUL terminator". */
     SLANGMAKE_C_API sm_perm_define_list_t* sm_parse_permutations_source(const char* src, size_t len);
     SLANGMAKE_C_API sm_perm_define_list_t* sm_parse_permutations_file(const char* path);
@@ -219,7 +236,9 @@ extern "C"
     SLANGMAKE_C_API size_t                 sm_permutation_list_size(const sm_permutation_list_t* list);
     /* Returned permutation is owned by the caller (clone). Free with sm_permutation_destroy. */
     SLANGMAKE_C_API sm_permutation_t* sm_permutation_list_clone_at(const sm_permutation_list_t* list, size_t i);
+#endif /* SLANG_MAKE_EXPOSE_RUNTIME */
 
+#ifdef SLANG_MAKE_EXPOSE_COMPILER
     /* ----- Compiler ------------------------------------------------------ */
     SLANGMAKE_C_API sm_compiler_t* sm_compiler_create(void);
     SLANGMAKE_C_API void           sm_compiler_destroy(sm_compiler_t* c);
@@ -237,7 +256,9 @@ extern "C"
     SLANGMAKE_C_API const char*    sm_compile_result_diagnostics(const sm_compile_result_t* r);
     SLANGMAKE_C_API size_t         sm_compile_result_dependency_count(const sm_compile_result_t* r);
     SLANGMAKE_C_API const char*    sm_compile_result_dependency(const sm_compile_result_t* r, size_t idx);
+#endif /* SLANG_MAKE_EXPOSE_COMPILER */
 
+#ifdef SLANG_MAKE_EXPOSE_RUNTIME
     /* ----- Blob writer --------------------------------------------------- */
     SLANGMAKE_C_API sm_blob_writer_t* sm_blob_writer_create(sm_target_t target);
     SLANGMAKE_C_API void              sm_blob_writer_destroy(sm_blob_writer_t* w);
@@ -296,6 +317,7 @@ extern "C"
     SLANGMAKE_C_API size_t      sm_blob_reader_dependency_count(const sm_blob_reader_t* r);
     SLANGMAKE_C_API const char* sm_blob_reader_dependency_path(const sm_blob_reader_t* r, size_t idx);
     SLANGMAKE_C_API uint64_t    sm_blob_reader_dependency_hash(const sm_blob_reader_t* r, size_t idx);
+#endif /* SLANG_MAKE_EXPOSE_RUNTIME */
 
     /* ----- Reflection: fmt:: POD mirrors --------------------------------- */
 #pragma pack(push, 4)
@@ -530,6 +552,7 @@ extern "C"
 
 #pragma pack(pop)
 
+#ifdef SLANG_MAKE_EXPOSE_RUNTIME
     /* ----- ReflectionView ------------------------------------------------ */
     SLANGMAKE_C_API sm_reflection_t* sm_reflection_open(const uint8_t* data, size_t size);
     SLANGMAKE_C_API void             sm_reflection_destroy(sm_reflection_t* r);
@@ -572,7 +595,9 @@ extern "C"
     /* Walking the reflection tree to compute (set, slot, byte-offset) tuples
      * is the RHI's job — slangmake exposes the raw tables above and stops
      * there. Consumers build their own bind-path representation on top. */
+#endif /* SLANG_MAKE_EXPOSE_RUNTIME */
 
+#ifdef SLANG_MAKE_EXPOSE_COMPILER
     /* ----- BatchCompiler ------------------------------------------------- */
     SLANGMAKE_C_API sm_batch_compiler_t* sm_batch_compiler_create(sm_compiler_t* compiler);
     SLANGMAKE_C_API void                 sm_batch_compiler_destroy(sm_batch_compiler_t* b);
@@ -603,6 +628,7 @@ extern "C"
     SLANGMAKE_C_API sm_permutation_t* sm_batch_output_compiled_clone(const sm_batch_output_t* o, size_t i);
     SLANGMAKE_C_API size_t            sm_batch_output_failure_count(const sm_batch_output_t* o);
     SLANGMAKE_C_API const char*       sm_batch_output_failure(const sm_batch_output_t* o, size_t i);
+#endif /* SLANG_MAKE_EXPOSE_COMPILER */
 
 #ifdef __cplusplus
 } /* extern "C" */

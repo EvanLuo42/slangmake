@@ -11,6 +11,14 @@
 #include <utility>
 #include <vector>
 
+// Selective API exposure. If neither macro is defined, expose the full API
+// (default). Define exactly one of them to compile against just the runtime
+// reader (matches what slangmake-rt.dll exports) or just the compiler surface.
+#if !defined(SLANG_MAKE_EXPOSE_RUNTIME) && !defined(SLANG_MAKE_EXPOSE_COMPILER)
+#define SLANG_MAKE_EXPOSE_RUNTIME
+#define SLANG_MAKE_EXPOSE_COMPILER
+#endif
+
 namespace slangmake
 {
 enum class Target : uint32_t
@@ -53,6 +61,8 @@ enum class FloatingPointMode : uint32_t
     Precise
 };
 
+#ifdef SLANG_MAKE_EXPOSE_RUNTIME
+
 /**
  * Canonical lowercase name of a codec.
  *
@@ -84,6 +94,8 @@ const char* targetToString(Target t);
  * @return  the parsed target, or std::nullopt if unrecognised
  */
 std::optional<Target> parseTarget(std::string_view s);
+
+#endif // SLANG_MAKE_EXPOSE_RUNTIME
 
 struct ShaderConstant
 {
@@ -151,6 +163,8 @@ struct Permutation
      */
     [[nodiscard]] std::string key() const;
 };
+
+#ifdef SLANG_MAKE_EXPOSE_RUNTIME
 
 /**
  * Parses "// [permutation] NAME={a,b,c}" magic-comment directives from Slang
@@ -221,6 +235,8 @@ bool sourceHasNoReflection(std::string_view source);
  *             false if the file is missing or unreadable
  */
 bool fileHasNoReflection(const std::filesystem::path& path);
+
+#endif // SLANG_MAKE_EXPOSE_RUNTIME
 
 namespace fmt
 {
@@ -509,6 +525,8 @@ struct EntryPoint
 
 } // namespace fmt
 
+#ifdef SLANG_MAKE_EXPOSE_COMPILER
+
 /**
  * Compiles a single permutation of a .slang source on demand. Internally owns
  * a Slang global session, but the Slang dependency is hidden behind a PImpl so
@@ -547,6 +565,10 @@ private:
     class Impl;
     std::unique_ptr<Impl> m_impl;
 };
+
+#endif // SLANG_MAKE_EXPOSE_COMPILER
+
+#ifdef SLANG_MAKE_EXPOSE_RUNTIME
 
 /**
  * Packs compiled entries into a single SLNG blob. Append entries with
@@ -824,6 +846,10 @@ private:
     Param decodeParam(const fmt::VarLayout& vl) const;
 };
 
+#endif // SLANG_MAKE_EXPOSE_RUNTIME
+
+#ifdef SLANG_MAKE_EXPOSE_COMPILER
+
 /**
  * High-level orchestration: parse permutation directives, expand them, drive
  * one or more Compiler instances (in parallel when requested), optionally
@@ -903,5 +929,7 @@ private:
     Codec     m_compression = Codec::None;
     Stats     m_stats;
 };
+
+#endif // SLANG_MAKE_EXPOSE_COMPILER
 
 } // namespace slangmake

@@ -6,7 +6,7 @@
 #include <string>
 #include <unordered_set>
 
-#include "slangmake_internal.h"
+#include "slangmake_internal_rt.h"
 
 namespace slangmake
 {
@@ -87,30 +87,6 @@ std::optional<Codec> parseCodec(std::string_view s)
     if (low == "zstd" || low == "zst")
         return Codec::Zstd;
     return std::nullopt;
-}
-
-SlangCompileTarget toSlangCompileTarget(Target t)
-{
-    switch (t)
-    {
-    case Target::SPIRV:
-        return SLANG_SPIRV;
-    case Target::DXIL:
-        return SLANG_DXIL;
-    case Target::DXBC:
-        return SLANG_DXBC;
-    case Target::HLSL:
-        return SLANG_HLSL;
-    case Target::GLSL:
-        return SLANG_GLSL;
-    case Target::Metal:
-        return SLANG_METAL;
-    case Target::MetalLib:
-        return SLANG_METAL_LIB;
-    case Target::WGSL:
-        return SLANG_WGSL;
-    }
-    return SLANG_TARGET_UNKNOWN;
 }
 
 std::string Permutation::key() const
@@ -609,6 +585,58 @@ uint64_t hashCompileOptions(const CompileOptions& o)
         fnv1aMixPod(h, bs.shift);
     }
     return h;
+}
+
+// Integer values mirror Slang's SlangCompileTarget so blobs stay
+// readable across the boundary; slangmake_util_compiler.cpp static_asserts
+// they remain in sync.
+uint32_t targetToBlobCode(Target t)
+{
+    switch (t)
+    {
+    case Target::GLSL:
+        return 2;
+    case Target::HLSL:
+        return 5;
+    case Target::SPIRV:
+        return 6;
+    case Target::DXBC:
+        return 8;
+    case Target::DXIL:
+        return 10;
+    case Target::Metal:
+        return 24;
+    case Target::MetalLib:
+        return 25;
+    case Target::WGSL:
+        return 28;
+    }
+    return 0;
+}
+
+Target blobCodeToTarget(uint32_t code)
+{
+    switch (code)
+    {
+    case 2:
+        return Target::GLSL;
+    case 5:
+        return Target::HLSL;
+    case 6:
+        return Target::SPIRV;
+    case 8:
+        return Target::DXBC;
+    case 10:
+        return Target::DXIL;
+    case 24:
+        return Target::Metal;
+    case 25:
+        return Target::MetalLib;
+    case 28:
+        return Target::WGSL;
+    default:
+        return Target::SPIRV;
+    }
 }
 
 } // namespace detail
